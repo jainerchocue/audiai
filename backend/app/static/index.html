@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#ffffff">
+<title>AudiAI</title>
+<link rel="stylesheet" href="/assets/audiai.css">
+</head>
+<body>
+<div class="app" id="app">
+  <nav class="rail" aria-label="Navegación">
+    <div class="rail-brand" aria-label="AudiAI">A</div>
+    <button class="new-review" id="newSessionBtn" aria-label="Nueva auditoría" title="Nueva auditoría">＋</button>
+  </nav>
+
+  <div class="workspace">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1>AudiAI</h1>
+      </div>
+      <div class="topbar-actions">
+        <button class="panel-toggle" id="panelToggle" aria-expanded="false" aria-controls="sidePanel">
+          <span aria-hidden="true">▤</span><span>Resultados</span><span class="panel-count" id="panelCount" hidden>0</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="chat-area" id="chatArea">
+      <div class="conversation">
+        <section class="welcome" id="welcome">
+          <h2 id="welcomeGreeting">Hola</h2>
+          <p>¿Qué quieres resolver hoy?</p>
+        </section>
+        <div id="chatLog" aria-live="polite" aria-relevant="additions text"></div>
+      </div>
+    </div>
+
+    <div class="composer-wrap">
+      <form class="composer" id="messageForm">
+        <div class="context-attachment" id="contextAttachment" hidden>
+          <span class="context-attachment-icon" aria-hidden="true">▰</span>
+          <span class="context-attachment-label" id="contextAttachmentLabel"></span>
+          <button class="context-attachment-remove" id="removeContextBtn" type="button"
+            aria-label="Quitar carpeta de contexto" title="Quitar carpeta de contexto">×</button>
+        </div>
+        <textarea id="messageInput" rows="1" aria-label="Mensaje"
+          placeholder="Escribe una instrucción o pregunta"></textarea>
+        <div class="composer-tools">
+          <div class="composer-selectors">
+            <details class="selector-menu" id="readMenu">
+              <summary class="selector-chip" aria-label="Modo de lectura">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                  <path d="M3 5.5c2.8-1.6 5.8-1.6 9 0v14c-3.2-1.6-6.2-1.6-9 0zm18 0c-2.8-1.6-5.8-1.6-9 0v14c3.2-1.6 6.2-1.6 9 0z"/>
+                </svg>
+                <span id="analysisModeChip">Lectura</span>
+                <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg>
+              </summary>
+              <div class="selector-popover">
+                <label class="selector-option" for="analysisModeSelector">
+                  <span>Enfoque</span>
+                  <select id="analysisModeSelector" aria-label="Enfoque de auditoría"
+                    aria-describedby="analysisModeHint">
+                    <option value="reading">Lectura</option>
+                    <option value="research">Investigación</option>
+                    <option value="unspecified">Sin especificar</option>
+                  </select>
+                  <span class="selector-hint" id="analysisModeHint"></span>
+                </label>
+                <label class="selector-option" for="sensitivePolicy">
+                  <span>Archivos confidenciales</span>
+                  <select id="sensitivePolicy" aria-label="Política de archivos confidenciales"
+                    aria-describedby="sensitivePolicyHint">
+                    <option value="ask">Pedir permiso</option>
+                    <option value="exclude">Excluir siempre</option>
+                  </select>
+                  <span class="selector-hint" id="sensitivePolicyHint">
+                    AudiAI pedirá permiso antes de leerlos, o puedes excluirlos siempre.
+                  </span>
+                </label>
+              </div>
+            </details>
+            <details class="selector-menu" id="modelMenu">
+              <summary class="selector-chip" aria-label="Modelo de inteligencia artificial">
+                <span id="modelChip">Sin IA conectada</span>
+                <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg>
+              </summary>
+              <div class="selector-popover" id="modelDetails">
+                <strong>Modelo de IA</strong>
+                <label class="selector-option" for="modelSelector">
+                  <span>Proveedor</span>
+                  <select id="modelSelector" aria-label="Seleccionar modelo conectado"
+                    aria-describedby="modelDescription">
+                    <option value="local">Auto</option>
+                  </select>
+                  <span class="selector-hint" id="modelDescription"></span>
+                </label>
+              </div>
+            </details>
+          </div>
+          <span class="tool-spacer"></span>
+          <details class="selector-menu" id="agentModeMenu">
+            <summary class="selector-chip" aria-label="Modo de agentes">
+              <span id="agentModeChip">Multiagente</span>
+              <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg>
+            </summary>
+            <div class="selector-popover">
+              <strong>Modo de trabajo</strong>
+              <label class="selector-option" for="agentModeSelector">
+                <span>Orquestación</span>
+                <select id="agentModeSelector" aria-label="Modo de agentes"
+                  aria-describedby="agentModeHint">
+                  <option value="multiagent">Multiagente</option>
+                  <option value="agent">Agente</option>
+                </select>
+                <span class="selector-hint" id="agentModeHint"></span>
+              </label>
+            </div>
+          </details>
+          <button class="context-btn" id="contextBtn" type="button" aria-label="Elegir carpeta del proyecto; se analizará localmente sin subir archivos" title="Elegir carpeta del proyecto · análisis local, sin subir archivos" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h6.9a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.8 10h16.4"/><path d="M12 12.5v5m-2.5-2.5h5"/></svg>
+          </button>
+          <button class="send" id="sendBtn" type="submit" aria-label="Enviar mensaje" title="Enviar mensaje">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <aside class="side-panel" id="sidePanel" aria-label="Panel de revisión" aria-hidden="true">
+    <div class="panel-head">
+      <div><span class="eyebrow">RESUMEN DE LA SESIÓN</span><h2>Resultados de auditoría</h2></div>
+      <button class="close-panel" id="closePanel" aria-label="Cerrar resultados">×</button>
+    </div>
+    <div class="tabs" role="tablist">
+      <button class="tab active" id="reviewTab" role="tab" aria-selected="true" data-panel-tab="review">Hallazgos e informe</button>
+      <button class="tab" id="evidenceTab" role="tab" aria-selected="false" data-panel-tab="evidence">Evidencias</button>
+      <button class="tab" id="patchTab" role="tab" aria-selected="false" data-panel-tab="patches">Parches</button>
+    </div>
+    <div class="panel-body" id="reviewBody" role="tabpanel">
+      <div class="summary-metrics" id="summaryMetrics" aria-label="Resumen cuantitativo"></div>
+      <h3>Actividad de los agentes</h3>
+      <div id="readyList"><p class="empty">Los resultados aparecerán aquí al completar cada etapa.</p></div>
+      <div class="report-heading">
+        <h3 class="subhead">Informe y fuentes</h3>
+        <button class="btn secondary report-download" id="downloadReportBtn" type="button" hidden>
+          Descargar README
+        </button>
+      </div>
+      <div id="docsList"><p class="empty">Aún no hay documentos.</p></div>
+    </div>
+    <div class="panel-body" id="patchBody" role="tabpanel" hidden>
+      <h3>Recomendaciones de remediación</h3>
+      <div id="patchList"><p class="empty">Aún no hay parches.</p></div>
+    </div>
+    <div class="panel-body" id="evidenceBody" role="tabpanel" hidden>
+      <h3 id="evidenceHeading">Evidencia recopilada</h3>
+      <div id="evidenceList"><p class="empty">Aún no hay evidencias.</p></div>
+    </div>
+    <p class="panel-disclaimer">Las conclusiones requieren revisión humana. El modo del proveedor se indica en el encabezado. Los parches son recomendaciones: AudiAI nunca modifica el proyecto.</p>
+  </aside>
+</div>
+<div class="toast" id="toast" role="status"></div>
+
+<script src="/assets/audiai.js" defer></script>
+</body>
+</html>

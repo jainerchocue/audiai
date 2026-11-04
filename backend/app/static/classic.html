@@ -1,0 +1,443 @@
+<!doctype html>
+<!-- Frontend mínimo de AudiAI (Fase 8, versión guiada): presenta el recorrido
+     existente, no crea lógica de auditoría. Todo se consume vía /audits
+     (Fase 7). Aviso de modo simulado SIEMPRE visible: ninguna simulación se
+     presenta como resultado real. Sin claves en el cliente. Sin recursos
+     externos (CDN, fuentes): cero red saliente aparte de la propia API. -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AudiAI · auditoría de código con evidencia</title>
+<style>
+  :root { --ink:#1f2430; --muted:#5a6270; --accent:#2563eb; --line:#e3e6ee; --panel:#ffffff; --bg:#f6f7fa; }
+  * { box-sizing: border-box; }
+  body { font-family: system-ui, "Segoe UI", sans-serif; margin:0; color: var(--ink); background: var(--bg); line-height: 1.5; }
+  main { max-width: 880px; margin: 0 auto; padding: 1.2rem; }
+  h1 { font-size: 1.5rem; margin: .4rem 0 .2rem; }
+  h2 { font-size: 1.15rem; margin: 1.8rem 0 .6rem; }
+  .lead { color: var(--muted); margin: .2rem 0 1rem; font-size: 1.02rem; }
+  .mock-note {
+    background:#fff7ec; border:1px solid #f0c987; color:#7a5200;
+    padding:.6rem .9rem; border-radius:10px; margin: .6rem 0 1.2rem; font-size:.95rem;
+  }
+  .mock-note.real-note { background:#eef7ff; border-color:#98c4f0; color:#0a4f8a; }
+  .steps { list-style:none; margin:0; padding:0; display:grid; gap:.55rem; }
+  .steps li { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.65rem .9rem; display:flex; gap:.7rem; align-items:flex-start; }
+  .step-num { background:var(--accent); color:#fff; font-weight:700; border-radius:50%; width:1.7rem; height:1.7rem; display:flex; align-items:center; justify-content:center; flex:0 0 auto; margin-top:.1rem; }
+  form { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:1rem; display:grid; gap:.7rem; }
+  label { font-weight:600; font-size:.95rem; }
+  label small { color: var(--muted); font-weight:400; }
+  input { font-size:1rem; padding:.6rem .7rem; border-radius:8px; border:1px solid var(--line); width:100%; }
+  .actions { display:flex; gap:.6rem; flex-wrap:wrap; }
+  button {
+    font-size:1rem; padding:.65rem 1.1rem; border-radius:8px; border:1px solid;
+    cursor:pointer; background:#fff; color:var(--ink); border-color:var(--line);
+  }
+  button.primary { background:var(--accent); border-color:var(--accent); color:#fff; flex:1 1 220px; }
+  button.primary:disabled { opacity:.55; cursor:wait; }
+  button.minor { color:var(--accent); }
+  .error { display:none; background:#fdecec; border:1px solid #e8a3a3; color:#8a1f1f; padding:.65rem .9rem; border-radius:10px; margin:.8rem 0; white-space:pre-wrap; }
+  details { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.7rem 1rem; margin:.5rem 0; }
+  summary { cursor:pointer; font-weight:600; }
+  details pre { background:#f0f2f7; border:1px solid var(--line); border-radius:8px; padding:.6rem .8rem; overflow-x:auto; font-size:.85rem; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:.75rem 1rem; margin:.55rem 0; }
+  .card .head { display:flex; gap:.6rem; align-items:center; flex-wrap:wrap; margin-bottom:.35rem; }
+  .sev { font-size:.8rem; padding:.1rem .55rem; border-radius:999px; font-weight:700; color:#fff; flex:0 0 auto; }
+  .sev.critical { background:#b91c1c; } .sev.high { background:#c2410c; }
+  .sev.medium { background:#a16207; } .sev.low { background:#15803d; }
+  .sev.info { background:#0369a1; } .sev.unknown { background:#6b7280; }
+  .card pre { background:#f0f2f7; border:1px dashed var(--line); border-radius:8px; padding:.5rem .7rem; overflow-x:auto; margin:.4rem 0; font-size:.85rem; white-space:pre-wrap; }
+  .meta { color: var(--muted); font-size:.9rem; }
+  a { color: var(--accent); }
+  .hidden { display:none; }
+  .ok { background:#eef7ee; border-color:#b8dcb8; }
+</style>
+</head>
+<body>
+<main>
+  <h1>AudiAI · auditoría de código con evidencia</h1>
+  <p class="lead">
+    Revisa <strong>una carpeta de tu computadora</strong> en modo
+    <strong>solo lectura</strong> y te dice qué revisar, mostrando la prueba
+    (archivo, línea y fragmento) de cada cosa que menciona. No modifica ni
+    ejecuta nada de la carpeta auditada.
+  </p>
+  <div class="mock-note">
+    <strong>Modo simulado (mock).</strong> Los hallazgos provienen de
+    comprobaciones deterministas de patrón y de un análisis simulado; ningún
+    texto fue evaluado todavía por un modelo real de IA. Una coincidencia no
+    equivale a explotabilidad: cada hallazgo pide revisión humana.
+  </div>
+
+  <h2>¿Cómo la uso? (3 pasos)</h2>
+  <ol class="steps">
+    <li><span class="step-num">1</span><span>Pega abajo la <strong>ruta de la carpeta</strong> que quieres revisar. Si no tienes una, hay un proyecto de ejemplo listo para copiar en la caja de abajo.</span></li>
+    <li><span class="step-num">2</span><span>Haz clic en <strong>Iniciar auditoría</strong> y espera unos segundos.</span></li>
+    <li><span class="step-num">3</span><span>Lee el informe: cada hallazgo indica <strong>archivo y línea</strong> con su evidencia. Con "Exportar JSON" te lo llevas a otro programa.</span></li>
+  </ol>
+
+  <h2>¿Cómo funciona el sistema?</h2>
+  <details>
+    <summary>Ver las 4 etapas de una auditoría</summary>
+    <ol>
+      <li><strong>Lee los archivos</strong> de la carpeta que indiques, de forma acotada: solo lectura, tope de tamaño, omite secretos (.env, llaves) y carpetas de dependencias. Nunca escribe ni ejecuta nada ahí.</li>
+      <li><strong>Aplica comprobaciones automáticas</strong>: busca patrones de riesgo conocidos, por ejemplo código que se ejecuta dinámicamente (<code>eval(…)</code>, <code>exec(…)</code>) o contraseñas/llaves escritas dentro del código.</li>
+      <li><strong>Interpreta la evidencia</strong>: hoy lo hace un análisis simulado (mock); la idea final es que un modelo de IA explique la causa probable, citando la misma evidencia.</li>
+      <li><strong>Valida</strong>: un hallazgo solo se publica si cita evidencia real generada en <em>esa misma</em> revisión; si cita algo que no existe, se descarta y queda anotado. Eso es lo que hace que el informe sea verificable.</li>
+    </ol>
+    <p class="meta">
+      Importante: en esta versión AudiAI revisa <strong>carpetas de código
+      (proyectos)</strong>, como repositorios o carpetas de trabajo. No
+      monitorea servidores en marcha ni equipos de la red — eso es un uso
+      futuro, no el actual.
+    </p>
+  </details>
+
+  <details>
+    <summary>¿Necesitas una carpeta de prueba? Cópiala aquí</summary>
+    <p>Estos comandos crean <strong>TÚ</strong> una carpeta de ejemplo con dos problemas clásicos (AudiAI nunca la crea ni la cambia; solo la lee). Pégalo en PowerShell:</p>
+    <pre id="demo-commands">$demo = "$env:TEMP\mi-juego-de-prueba"
+New-Item -ItemType Directory -Force -Path "$demo\src" | Out-Null
+Set-Content "$demo\src\legacy.py" "def ejecutar(texto):`n    return eval(texto)"
+Set-Content "$demo\src\secretos.py" 'ADMIN_PASSWORD = "clave-super-larga-001"'
+Write-Host "Listo. Audita esta carpeta: $demo"</pre>
+    <button type="button" class="minor" id="copy-demo">Copiar comandos de prueba</button>
+    <span class="meta" id="copy-hint"></span>
+  </details>
+
+  <h2>Iniciar una auditoría</h2>
+  <form id="run-form">
+    <div>
+      <label for="scope-root">Carpeta a revisar <small>— ruta completa, ej: C:\Users\tu\proyecto</small></label>
+      <input id="scope-root" name="scope_root" placeholder="C:\Users\tu\proyecto" required>
+    </div>
+    <div>
+      <label for="audit-id">Nombre de esta revisión <small>— opcional; ej: revision-notas-enero</small></label>
+      <input id="audit-id" name="audit_id" placeholder="mi-revision-1" autocomplete="off">
+    </div>
+    <div class="actions">
+      <button type="submit" class="primary" id="run">Iniciar auditoría</button>
+      <button type="button" class="minor" id="refresh">Ver una anterior</button>
+    </div>
+  </form>
+
+  <div class="error" id="error"></div>
+
+  <section id="resumen" class="hidden">
+    <h2>Resultado</h2>
+    <div class="card ok" id="resumen-body"></div>
+    <div class="actions">
+      <button type="button" class="minor" id="export">Exportar JSON</button>
+    </div>
+    <div class="meta" id="limitations"></div>
+
+    <h2>Hallazgos (qué revisar y por qué)</h2>
+    <div class="meta" id="findings"></div>
+
+    <h2>Evidencias (la prueba de cada hallazgo)</h2>
+    <div id="evidence"></div>
+  </section>
+
+  <section>
+    <h2>Auditorías de esta sesión</h2>
+    <p class="meta">Se guarda en memoria mientras el programa corre; al reiniciar se borra.</p>
+    <ul id="prev-list"></ul>
+  </section>
+</main>
+
+<script>
+(function () {
+  "use strict";
+
+  var elements = {
+    form: document.getElementById("run-form"),
+    scopeRoot: document.getElementById("scope-root"),
+    auditId: document.getElementById("audit-id"),
+    run: document.getElementById("run"),
+    refresh: document.getElementById("refresh"),
+    error: document.getElementById("error"),
+    resumen: document.getElementById("resumen"),
+    resumenBody: document.getElementById("resumen-body"),
+    limitations: document.getElementById("limitations"),
+    findings: document.getElementById("findings"),
+    evidence: document.getElementById("evidence"),
+    export: document.getElementById("export"),
+    prevList: document.getElementById("prev-list"),
+    copyDemo: document.getElementById("copy-demo"),
+    copyHint: document.getElementById("copy-hint")
+  };
+
+  var severityTag = {
+    critical: "Crítico — arreglar ya",
+    high: "Alto — revisar pronto",
+    medium: "Medio — revisar",
+    low: "Bajo — revisar cuando puedas",
+    info: "Informativo",
+    unknown: "Sin clasificar — revisar persona"
+  };
+  var bannerMockHtml = document.querySelector(".mock-note").innerHTML;
+  var findingMeaning = {
+    "Ejecución dinámica de código":
+      "La línea usa eval(…) o exec(…): el programa puede ejecutar texto como si fuera código. Es grave solo si ese texto puede venir de fuera (usuario, archivo, red).",
+    "Credencial embebida en el código":
+      "Hay una contraseña o llave escrita dentro del archivo. Cualquiera con acceso al código la lee; conviene moverla a un gestor de secretos o a variables de entorno."
+  };
+
+  var lastReport = null;
+  var submitting = false;
+
+  function showError(text) {
+    elements.error.textContent = text;
+    elements.error.style.display = "block";
+  }
+  function clearError() {
+    elements.error.textContent = "";
+    elements.error.style.display = "none";
+  }
+
+  async function detailOf(response, fallback) {
+    try {
+      var data = await response.json();
+      return (data && data.detail) || fallback;
+    } catch (error) {
+      return fallback;
+    }
+  }
+
+  async function openReport(auditId) {
+    var response = await fetch("/audits/" + auditId + "/report");
+    if (!response.ok) {
+      showError("No se encontró esa revisión. Verifica el nombre o elige una de la lista.");
+      return;
+    }
+    lastReport = await response.json();
+    clearError();
+    render(lastReport);
+  }
+
+  function render(report) {
+    var audit = report.audit;
+    var banner = document.querySelector(".mock-note");
+    if (audit.origin === "real") {
+      banner.className = "mock-note real-note";
+      banner.innerHTML =
+        "<strong>Análisis real (no simulado).</strong> Subagente " +
+        (audit.model ? "(" + audit.model + ")" : "") +
+        " evaluó este recorrido. El contexto fue compartido con el proveedor. " +
+        "Coincidencia de patrón no implica explotabilidad: cada hallazgo pide revisión humana.";
+    } else {
+      banner.className = "mock-note";
+      banner.innerHTML = bannerMockHtml;
+    }
+
+    var summary = "La revisión '" + audit.audit_id + "' terminó con " + audit.status +
+      " · " + audit.findings_count + " hallazgo(s) · " + audit.evidence_count +
+      " evidencia(s) · " + audit.steps_used + " pasos ejecutados";
+    if (audit.failure_reason) {
+      summary += "\nNo se completó: " + audit.failure_reason;
+    }
+    elements.resumenBody.textContent = summary;
+    elements.resumen.classList.remove("hidden");
+
+    elements.limitations.textContent = (audit.limitations || []).join(" ");
+    renderFindings(report.findings);
+    renderEvidence(report.evidence);
+  }
+
+  function renderFindings(findings) {
+    elements.findings.innerHTML = "";
+    if (!findings.length) {
+      elements.findings.textContent =
+        "Sin hallazgos. Significa que las comprobaciones no vieron nada de lo que revisan — no que el código esté garantizado seguro.";
+      return;
+    }
+    findings.forEach(function (finding) {
+      var card = document.createElement("div");
+      card.className = "card";
+
+      var head = document.createElement("div");
+      head.className = "head";
+      var chip = document.createElement("span");
+      chip.className = "sev " + finding.severity;
+      chip.textContent = severityTag[finding.severity] || finding.severity;
+      var title = document.createElement("strong");
+      title.textContent = finding.title;
+      head.appendChild(chip);
+      head.appendChild(title);
+
+      var body = document.createElement("div");
+      var lines = [finding.explanation];
+      var friendly = null;
+      for (var meaning in findingMeaning) {
+        if (finding.title.indexOf(meaning) === 0) {
+          friendly = findingMeaning[meaning];
+          break;
+        }
+      }
+      if (friendly) {
+        lines.push("");
+        lines.push("En simple: " + friendly);
+      }
+      if (finding.evidence_ids && finding.evidence_ids.length) {
+        lines.push("");
+        lines.push("Prueba: " + finding.evidence_ids.join(", ") +
+          " (cada evidencia está listada más abajo)");
+      }
+      if (finding.recommendation) {
+        lines.push("");
+        lines.push("Sugerencia: " + finding.recommendation);
+      }
+      if (finding.uncertainty) {
+        lines.push("");
+        lines.push("Aviso: " + finding.uncertainty);
+      }
+      body.textContent = lines.join("\n");
+
+      card.appendChild(head);
+      card.appendChild(body);
+      elements.findings.appendChild(card);
+    });
+  }
+
+  function renderEvidence(evidences) {
+    elements.evidence.innerHTML = "";
+    if (!evidences.length) {
+      elements.evidence.textContent = "Sin evidencias.";
+      return;
+    }
+    evidences.forEach(function (evidence) {
+      var card = document.createElement("div");
+      card.className = "card";
+      var head = document.createElement("div");
+      head.className = "head";
+      head.textContent = evidence.evidence_id;
+      var where = document.createElement("div");
+      where.className = "meta";
+      where.textContent = "Archivo: " + evidence.source_path +
+        (evidence.line_start ? "  ·  línea " + evidence.line_start : "") +
+        "  ·  producción: " + evidence.tool;
+      var fragment = document.createElement("pre");
+      fragment.textContent = evidence.snippet;
+      card.appendChild(head);
+      card.appendChild(where);
+      card.appendChild(fragment);
+      elements.evidence.appendChild(card);
+    });
+  }
+
+  function refreshPrevious() {
+    fetch("/audits")
+      .then(function (response) { return response.ok ? response.json() : []; })
+      .then(function (items) {
+        elements.prevList.innerHTML = "";
+        if (!items || !items.length) {
+          var none = document.createElement("li");
+          none.className = "meta";
+          none.textContent = "Todavía no hay auditorías en esta sesión.";
+          elements.prevList.appendChild(none);
+          return;
+        }
+        items.forEach(function (item) {
+          var link = document.createElement("a");
+          link.href = "#";
+          link.textContent = item.audit_id + " (" + item.status + ", " +
+            item.findings_count + " hallazgos)";
+          link.addEventListener("click", function (event) {
+            event.preventDefault();
+            openReport(item.audit_id);
+          });
+          var itemEl = document.createElement("li");
+          itemEl.appendChild(link);
+          elements.prevList.appendChild(itemEl);
+        });
+      })
+      .catch(function (error) {
+        showError("No se pudo consultar la lista de revisiones: " + error);
+      });
+  }
+
+  elements.form.addEventListener("submit", async function (event) {
+    event.preventDefault();
+    if (submitting) {
+      return;
+    }
+    submitting = true;
+    clearError();
+    elements.run.textContent = "Revisando… espera";
+    elements.run.disabled = true;
+
+    var payload = { scope_root: elements.scopeRoot.value.trim() };
+    var name = elements.auditId.value.trim();
+    if (name) {
+      payload.audit_id = name;
+    }
+
+    try {
+      var response = await fetch("/audits", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      if (response.status === 409) {
+        showError("El nombre '" + name + "' ya se usó. Pon otro nombre (ej: mi-revision-2) o déjalo vacío y el sistema lo numera solo.");
+      } else if (response.status === 422) {
+        showError("La carpeta no existe (o no es una carpeta). Copia la ruta completa tal cual, ejemplo: C:\\Users\\tu\\proyecto");
+      } else if (!response.ok) {
+        showError("La revisión no se pudo iniciar: " + await detailOf(response, response.status));
+      } else {
+        lastReport = await response.json();
+        render(lastReport);
+        refreshPrevious();
+      }
+    } catch (error) {
+      showError("No se pudo conectar con el servicio. ¿Está corriendo? " + error);
+    } finally {
+      elements.run.disabled = false;
+      elements.run.textContent = "Iniciar auditoría";
+      submitting = false;
+    }
+  });
+
+  elements.refresh.addEventListener("click", function () {
+    clearError();
+    var manual = elements.auditId.value.trim();
+    if (manual) {
+      openReport(manual);
+    } else {
+      refreshPrevious();
+      showError("Pon el nombre de la revisión que quieres ver en el campo 'Nombre de esta revisión', o elige una de la lista de abajo.");
+    }
+  });
+
+  elements.export.addEventListener("click", function () {
+    if (!lastReport) {
+      showError("Aún no hay informe que exportar. Inicia una revisión primero.");
+      return;
+    }
+    var blob = new Blob([JSON.stringify(lastReport, null, 2)], { type: "application/json" });
+    var anchor = document.createElement("a");
+    anchor.href = URL.createObjectURL(blob);
+    anchor.download = "audiai-" + lastReport.audit.audit_id + ".json";
+    anchor.click();
+    URL.revokeObjectURL(anchor.href);
+  });
+
+  elements.copyDemo.addEventListener("click", function () {
+    var commands = document.getElementById("demo-commands").textContent;
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(commands).then(function () {
+        elements.copyHint.textContent = "Copiado: pégalo en PowerShell y ejecuta.";
+      }, function () {
+        elements.copyHint.textContent = "No se pudo copiar automáticamente; selecciona el texto manualmente.";
+      });
+    } else {
+      elements.copyHint.textContent = "Selecciona el texto del recuadro y cópialo manualmente.";
+    }
+  });
+
+  refreshPrevious();
+})();
+</script>
+</body>
+</html>

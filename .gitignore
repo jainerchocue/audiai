@@ -1,0 +1,33 @@
+# Entornos virtuales
+.venv/
+venv/
+env/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Datos locales de AudiAI (nunca dentro del proyecto auditado)
+*.db
+*.sqlite3
+reports/
+.audiai/
+
+# Frontend / Node
+node_modules/
+dist/
+
+# Entorno y secretos: nunca versionar
+.env
+.env.*
+!.env.example
+
+# Editores y sistema
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

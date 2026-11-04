@@ -1,0 +1,11 @@
+# Dependencias del backend y la app de escritorio de AudiAI.
+# Versiones verificadas en Python 3.15.0 / Windows con .venv local.
+#
+# Nota: se usa `uvicorn` sin extras. `uvicorn[standard]` arrastra PyYAML, que no
+# tiene wheel para cp315 y exige Microsoft Visual C++ Build Tools (no disponible).
+# No añadir extras hasta resolver ese requisito.
+fastapi==0.162.0
+uvicorn==0.54.0
+pywebview==6.2.1
+pytest==9.1.1
+httpx2==2.16.0

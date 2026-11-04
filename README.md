@@ -8,13 +8,16 @@ AudiAI fue creado por **Jainer Johany Chocue Viluche**.
 
 ## Licencia y uso comercial
 
-AudiAI se distribuye bajo la licencia [Apache-2.0](./LICENSE). Puedes usarlo,
+AudiAI se distribuye bajo la licencia [GNU GPL-3.0](./LICENSE). Puedes usarlo,
 modificarlo y redistribuirlo, incluso con fines comerciales, respetando sus
-condiciones. La licencia no concede derechos sobre la marca AudiAI.
+condiciones. Si distribuyes copias o versiones modificadas, debes mantenerlas
+bajo GPL-3.0 y proporcionar el código fuente correspondiente conforme a la
+licencia. Esto no obliga a enviar tus cambios al proyecto original. La licencia
+no concede derechos sobre la marca AudiAI.
 
-El código abierto no impide ofrecer servicios comerciales independientes,
-como instalación, capacitación, soporte o integraciones. Esos servicios no
-pueden retirar los derechos que Apache-2.0 ya concede sobre el código.
+La GPL-3.0 no exige publicar modificaciones que no se distribuyan. Si se quiere
+exigir la publicación de cambios usados para ofrecer el programa por red, la
+GNU AGPL-3.0 sería más adecuada.
 
 ## Estado y propósito
 

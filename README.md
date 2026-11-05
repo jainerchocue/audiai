@@ -43,6 +43,14 @@ los informes y cómo adjuntar un proyecto como contexto.
 
 ![Etapas del análisis de AudiAI](docs/images/audiai-analisis.png)
 
+### Resultados de auditoría
+
+![Resumen de hallazgos y evidencias](docs/images/audiai-resultados.png)
+
+### Recomendaciones de remediación
+
+![Parches sugeridos por AudiAI](docs/images/audiai-parches.png)
+
 ## Privacidad y límites
 
 - El análisis se limita a la carpeta seleccionada y es de solo lectura.

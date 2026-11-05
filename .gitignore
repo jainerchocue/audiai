@@ -20,7 +20,7 @@ reports/
 # Frontend / Node
 node_modules/
 dist/
-
+ 
 # Entornos y secretos locales: nunca versionar
 **/.env
 **/.env.*

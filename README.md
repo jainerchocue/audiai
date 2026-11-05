@@ -31,6 +31,10 @@ los informes y cómo adjuntar un proyecto como contexto.
 
 ![Ejemplo de conversación en AudiAI](docs/images/audiai-chat.png)
 
+### Selección del modo de análisis
+
+![Selector de modos Agente y Multiagente](docs/images/audiai-modos.png)
+
 ## Privacidad y límites
 
 - El análisis se limita a la carpeta seleccionada y es de solo lectura.

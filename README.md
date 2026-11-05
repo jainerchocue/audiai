@@ -39,6 +39,10 @@ los informes y cómo adjuntar un proyecto como contexto.
 
 ![Solicitud de autorización de archivos confidenciales](docs/images/audiai-autorizacion.png)
 
+### Análisis en curso
+
+![Etapas del análisis de AudiAI](docs/images/audiai-analisis.png)
+
 ## Privacidad y límites
 
 - El análisis se limita a la carpeta seleccionada y es de solo lectura.

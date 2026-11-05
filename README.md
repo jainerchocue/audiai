@@ -21,11 +21,15 @@ y puede utilizar modelos de lenguaje para ayudar a analizar los resultados.
 Consulta la [guía de uso](docs/README.md) para conocer los modos de análisis,
 los informes y cómo adjuntar un proyecto como contexto.
 
-## Demostración
+## Interfaz
 
-[![Ver demostración de AudiAI](https://img.youtube.com/vi/8cyYC9ALzQM/hqdefault.jpg)](https://youtu.be/8cyYC9ALzQM)
+### Pantalla de inicio
 
-Selecciona la miniatura para ver el video de presentación de AudiAI en YouTube.
+![Pantalla de inicio de AudiAI](docs/images/audiai-inicio.png)
+
+### Conversación con AudiAI
+
+![Ejemplo de conversación en AudiAI](docs/images/audiai-chat.png)
 
 ## Privacidad y límites
 

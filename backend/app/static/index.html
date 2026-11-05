@@ -11,17 +11,30 @@
 <div class="app" id="app">
   <nav class="rail" aria-label="Navegación">
     <div class="rail-brand" aria-label="AudiAI">A</div>
-    <button class="new-review" id="newSessionBtn" aria-label="Nueva auditoría" title="Nueva auditoría">＋</button>
+    <button class="new-review" id="newSessionBtn" aria-label="Nueva auditoría" title="Nueva auditoría">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <div class="rail-spacer"></div>
+    <a class="rail-link" href="/classic" title="Interfaz clásica" aria-label="Interfaz clásica">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 4h6v6M20 4l-9 9"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>
+    </a>
   </nav>
 
   <div class="workspace">
     <header class="topbar">
       <div class="topbar-title">
+        <span class="topbar-kicker">AUDITORÍA DE CÓDIGO</span>
         <h1>AudiAI</h1>
       </div>
       <div class="topbar-actions">
+        <span class="trust-badge">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4.5" y="10" width="15" height="10" rx="2"/><path d="M8 10V7.5a4 4 0 0 1 8 0V10"/></svg>
+          Solo lectura
+        </span>
+        <span class="mode-badge" id="providerBadge">Verificando modo</span>
         <button class="panel-toggle" id="panelToggle" aria-expanded="false" aria-controls="sidePanel">
-          <span aria-hidden="true">▤</span><span>Resultados</span><span class="panel-count" id="panelCount" hidden>0</span>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M5 5h14v14H5zM9 5v14"/></svg>
+          <span>Resultados</span><span class="panel-count" id="panelCount" hidden>0</span>
         </button>
       </div>
     </header>
@@ -31,6 +44,7 @@
         <section class="welcome" id="welcome">
           <h2 id="welcomeGreeting">Hola</h2>
           <p>¿Qué quieres resolver hoy?</p>
+          <p class="scope-note">Comparte una ruta o describe el proyecto. AudiAI lee en solo lectura, te pide permiso antes de cada etapa sensible y respalda cada hallazgo con evidencia.</p>
         </section>
         <div id="chatLog" aria-live="polite" aria-relevant="additions text"></div>
       </div>
@@ -39,13 +53,15 @@
     <div class="composer-wrap">
       <form class="composer" id="messageForm">
         <div class="context-attachment" id="contextAttachment" hidden>
-          <span class="context-attachment-icon" aria-hidden="true">▰</span>
+          <span class="context-attachment-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h6.9a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>
+          </span>
           <span class="context-attachment-label" id="contextAttachmentLabel"></span>
           <button class="context-attachment-remove" id="removeContextBtn" type="button"
             aria-label="Quitar carpeta de contexto" title="Quitar carpeta de contexto">×</button>
         </div>
         <textarea id="messageInput" rows="1" aria-label="Mensaje"
-          placeholder="Escribe una instrucción o pregunta"></textarea>
+          placeholder="Escribe una instrucción o pregunta" disabled></textarea>
         <div class="composer-tools">
           <div class="composer-selectors">
             <details class="selector-menu" id="readMenu">
@@ -57,6 +73,7 @@
                 <svg class="chevron" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m3 4.5 3 3 3-3"/></svg>
               </summary>
               <div class="selector-popover">
+                <strong>Alcance del análisis</strong>
                 <label class="selector-option" for="analysisModeSelector">
                   <span>Enfoque</span>
                   <select id="analysisModeSelector" aria-label="Enfoque de auditoría"
@@ -120,11 +137,12 @@
           <button class="context-btn" id="contextBtn" type="button" aria-label="Elegir carpeta del proyecto; se analizará localmente sin subir archivos" title="Elegir carpeta del proyecto · análisis local, sin subir archivos" hidden>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2h6.9a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/><path d="M3.8 10h16.4"/><path d="M12 12.5v5m-2.5-2.5h5"/></svg>
           </button>
-          <button class="send" id="sendBtn" type="submit" aria-label="Enviar mensaje" title="Enviar mensaje">
+          <button class="send" id="sendBtn" type="submit" aria-label="Enviar mensaje" title="Enviar mensaje" disabled>
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 19V5m-6 6 6-6 6 6"/></svg>
           </button>
         </div>
       </form>
+      <p class="composer-footnote">Enter para enviar · pide permiso para archivos confidenciales y para usar IA externa · AudiAI nunca modifica el proyecto</p>
     </div>
   </div>
 

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from datetime import datetime
-from pathlib import Path
 
 from app.domain.tools import is_sensitive_path
 from app.services.agent_chat import ChatSession

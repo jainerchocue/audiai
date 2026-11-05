@@ -21,9 +21,9 @@ reports/
 node_modules/
 dist/
 
-# Entorno y secretos: nunca versionar
-.env
-.env.*
+# Entornos y secretos locales: nunca versionar
+**/.env
+**/.env.*
 !.env.example
 
 # Editores y sistema

@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config.settings import Settings
 from app.main import build_roles, create_app
 from app.providers.lmstudio import LMStudioRoleExecutor
+from app.providers.openrouter import OpenRouterRoleExecutor
 
 
 def test_defaults_are_conservative(monkeypatch) -> None:
+    monkeypatch.setattr("app.config.settings.load_dotenv", lambda **_kwargs: None)
     for variable in (
         "AUDIAI_ENV",
         "AUDIAI_HOST",
@@ -19,6 +22,8 @@ def test_defaults_are_conservative(monkeypatch) -> None:
         "AUDIAI_LMSTUDIO_BASE_URL",
         "AUDIAI_LMSTUDIO_MODEL",
         "AUDIAI_LMSTUDIO_API_KEY",
+        "OPENROUTER_MODEL",
+        "OPENROUTER_API_KEY",
     ):
         monkeypatch.delenv(variable, raising=False)
 
@@ -48,6 +53,48 @@ def test_lmstudio_settings_are_loaded_without_exposing_api_key(monkeypatch) -> N
     assert settings.role_provider == "lmstudio"
     assert isinstance(executor, LMStudioRoleExecutor)
     assert "local-secret" not in repr(settings)
+
+
+def test_openrouter_settings_build_direct_provider_without_exposing_key(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUDIAI_ROLE_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_MODEL", "provider/test-model")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "remote-secret")
+
+    settings = Settings.from_env()
+    executor = build_roles(settings)
+
+    assert settings.role_provider == "openrouter"
+    assert isinstance(executor, OpenRouterRoleExecutor)
+    assert "remote-secret" not in repr(settings)
+
+
+def test_openrouter_provider_requires_key_and_model(monkeypatch) -> None:
+    monkeypatch.setattr("app.config.settings.load_dotenv", lambda **_kwargs: None)
+    monkeypatch.setenv("AUDIAI_ROLE_PROVIDER", "openrouter")
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+
+    with pytest.raises(ValueError, match="OPENROUTER_API_KEY"):
+        build_roles(Settings.from_env())
+
+
+def test_openrouter_chat_uses_configured_model_without_exposing_key(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AUDIAI_ROLE_PROVIDER", "openrouter")
+    monkeypatch.setenv("OPENROUTER_MODEL", "provider/test-model")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "remote-secret")
+
+    client = TestClient(create_app())
+    created = client.post("/agent/sessions")
+
+    assert created.status_code == 201
+    body = created.json()
+    assert body["roles_provider"] == "openrouter"
+    assert body["configured_model"] == "provider/test-model"
+    assert "remote-secret" not in created.text
 
 
 def test_environment_overrides_are_read(monkeypatch) -> None:

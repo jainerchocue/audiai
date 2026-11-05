@@ -1,14 +1,16 @@
 """Configuración del backend, cargada desde variables de entorno.
 
-Contiene únicamente valores de transporte y ejecución. No lee ni registra
-secretos: las credenciales de proveedores se añadirán en la fase del
-proveedor real, nunca aquí por defecto.
+Contiene valores de transporte y ejecución. Lee secretos desde el entorno o
+desde el archivo .env local ignorado por Git; nunca los registra.
 """
 
 from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
+
+from dotenv import load_dotenv
 
 _ENVIRONMENT_DEVELOPMENT = "development"
 
@@ -34,6 +36,8 @@ class Settings:
     lmstudio_base_url: str = "http://127.0.0.1:1234/v1"
     lmstudio_model: str = ""
     lmstudio_api_key: str = field(default="", repr=False)
+    openrouter_model: str = ""
+    openrouter_api_key: str = field(default="", repr=False)
 
     @property
     def is_development(self) -> bool:
@@ -43,6 +47,8 @@ class Settings:
 
     @classmethod
     def from_env(cls) -> "Settings":
+        env_file = Path(__file__).resolve().parents[3] / ".env"
+        load_dotenv(dotenv_path=env_file, override=False)
         return cls(
             environment=_env_str("AUDIAI_ENV", _ENVIRONMENT_DEVELOPMENT),
             host=_env_str("AUDIAI_HOST", "127.0.0.1"),
@@ -56,6 +62,8 @@ class Settings:
             ),
             lmstudio_model=_env_str("AUDIAI_LMSTUDIO_MODEL", ""),
             lmstudio_api_key=_env_str("AUDIAI_LMSTUDIO_API_KEY", ""),
+            openrouter_model=_env_str("OPENROUTER_MODEL", ""),
+            openrouter_api_key=_env_str("OPENROUTER_API_KEY", ""),
         )
 
 

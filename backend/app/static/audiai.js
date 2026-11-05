@@ -1,15 +1,19 @@
 "use strict";
 
 var state = null;
-var activityStatus = null;
 var pendingTurn = null;
+var liveWork = null;
+var turnDurations = {};
+var openActivities = {};
 var autoApprovalScheduled = false;
 var autoApprovalBlockedAction = null;
 var selectedModel = "local";
 var modelChoiceInitialized = false;
 var desktopControlsReady = false;
 var selectedProjectFolder = null;
+var MIN_STEP_MS = 520;
 var $ = function (id) { return document.getElementById(id); };
+
 var workflowStages = [
   {id:"list", label:"Seleccionar alcance"},
   {id:"checks", label:"Comprobaciones locales"},
@@ -20,6 +24,49 @@ var workflowStages = [
   {id:"patches", label:"Recomendaciones"},
   {id:"review", label:"Revisión final"}
 ];
+
+var STEP_COPY = {
+  think: {
+    label:"Pensando",
+    detail:"Interpretando la solicitud y preparando el siguiente paso."
+  },
+  list: {
+    label:"Leyendo el proyecto",
+    detail:"Abriendo archivos permitidos en modo de solo lectura."
+  },
+  sensitive: {
+    label:"Leyendo archivos autorizados",
+    detail:"Accediendo únicamente a los archivos que autorizaste."
+  },
+  checks: {
+    label:"Revisando el código",
+    detail:"Ejecutando comprobaciones deterministas sobre el contenido permitido."
+  },
+  security: {
+    label:"Evaluando seguridad",
+    detail:"Relacionando la evidencia autorizada con riesgos y controles."
+  },
+  analysis: {
+    label:"Analizando causas",
+    detail:"Investigando la causa probable con la evidencia disponible."
+  },
+  sources: {
+    label:"Comprobando fuentes",
+    detail:"Revisando la procedencia local; sin búsqueda web."
+  },
+  docs: {
+    label:"Documentando",
+    detail:"Redactando el informe a partir de los resultados obtenidos."
+  },
+  patches: {
+    label:"Preparando recomendaciones",
+    detail:"Proponiendo mitigaciones en texto; no se modifica ningún archivo."
+  },
+  review: {
+    label:"Revisando resultados",
+    detail:"Contrastando las conclusiones con la evidencia disponible."
+  }
+};
 
 function element(tag, className, text) {
   var node = document.createElement(tag);
@@ -133,7 +180,7 @@ function showToast(text) {
   var toast = $("toast");
   toast.textContent = text;
   toast.classList.add("show");
-  window.setTimeout(function () { toast.classList.remove("show"); }, 2600);
+  window.setTimeout(function () { toast.classList.remove("show"); }, 2800);
 }
 
 async function request(url, options) {
@@ -141,24 +188,30 @@ async function request(url, options) {
   try {
     response = await fetch(url, options || {});
   } catch (error) {
-    showToast("No se pudo conectar con AudiAI. Comprueba que el servidor siga activo.");
+    if (!options || !options.quiet) {
+      showToast("No se pudo conectar con AudiAI. Comprueba que el servidor siga activo.");
+    }
     return null;
   }
   if (!response.ok) {
-    var detail = "";
-    try { detail = (await response.json()).detail || ""; } catch (error) { /* sin detalle JSON */ }
-    showToast("Error " + response.status + (detail ? ": " + detail : ""));
+    if (!options || !options.quiet) {
+      var detail = "";
+      try { detail = (await response.json()).detail || ""; } catch (error) { /* sin detalle JSON */ }
+      showToast("Error " + response.status + (detail ? ": " + detail : ""));
+    }
     return null;
   }
   return response.json();
 }
 
-function post(url, body) {
-  return request(url, {
+function post(url, body, options) {
+  var settings = {
     method:"POST",
     headers:{"Content-Type":"application/json"},
     body:JSON.stringify(body || {})
-  });
+  };
+  if (options && options.quiet) { settings.quiet = true; }
+  return request(url, settings);
 }
 
 async function postChatStream(url, body, onDelta) {
@@ -238,10 +291,573 @@ async function postChatStream(url, body, onDelta) {
   return finalState;
 }
 
-function stageIndex(stageId) {
-  return activeWorkflowStages().findIndex(function (stage) {
-    return stage.id === stageId;
+function wait(milliseconds) {
+  return new Promise(function (resolve) { window.setTimeout(resolve, milliseconds); });
+}
+
+function paint() {
+  return new Promise(function (resolve) {
+    window.requestAnimationFrame(function () {
+      window.requestAnimationFrame(resolve);
+    });
   });
+}
+
+function formatDuration(milliseconds) {
+  var safe = Math.max(0, Math.round(milliseconds));
+  if (safe < 1000) { return Math.max(1, safe) + " ms"; }
+  var seconds = safe / 1000;
+  if (seconds < 10) { return seconds.toFixed(1).replace(".", ",") + " s"; }
+  if (seconds < 60) { return Math.round(seconds) + " s"; }
+  var minutes = Math.floor(seconds / 60);
+  var rest = Math.round(seconds % 60);
+  return minutes + " min" + (rest ? " " + rest + " s" : "");
+}
+
+function counted(count, singular, plural) {
+  return count + " " + (count === 1 ? singular : plural);
+}
+
+function userMessageCount() {
+  if (!state) { return 0; }
+  return state.messages.filter(function (message) {
+    return message.author === "user";
+  }).length;
+}
+
+function lastActivity(session, kind) {
+  var activities = (session && session.activities) || [];
+  for (var index = activities.length - 1; index >= 0; index -= 1) {
+    if (activities[index].kind === kind) { return activities[index]; }
+  }
+  return null;
+}
+
+function activeTurnNumber() {
+  var count = userMessageCount();
+  if (pendingTurn) { return count + 1; }
+  return Math.max(1, count);
+}
+
+function ensureLiveWork(turnNumber) {
+  if (liveWork && !liveWork.finishedAt) { return liveWork; }
+  liveWork = {
+    turn: turnNumber,
+    startedAt: Date.now(),
+    finishedAt: null,
+    running: false,
+    current: null,
+    steps: []
+  };
+  return liveWork;
+}
+
+function beginStep(kind, label, detail) {
+  if (!liveWork) { ensureLiveWork(activeTurnNumber()); }
+  var step = {
+    key: kind,
+    title: label,
+    detail: detail,
+    status: "running",
+    origin: ""
+  };
+  liveWork.steps.push(step);
+  liveWork.current = step;
+  liveWork.running = true;
+  return step;
+}
+
+function completeStep(status, detail, origin) {
+  if (!liveWork || !liveWork.current) { return; }
+  liveWork.current.status = status || "completada";
+  if (detail) { liveWork.current.detail = detail; }
+  liveWork.current.origin = origin || "";
+  liveWork.current = null;
+  liveWork.running = false;
+}
+
+function finishLiveWork() {
+  if (!liveWork || liveWork.finishedAt) { return; }
+  if (liveWork.current) {
+    liveWork.current.status = "fallida";
+    liveWork.current.detail = "La conexión terminó antes de confirmar esta etapa.";
+    liveWork.current = null;
+  }
+  liveWork.running = false;
+  liveWork.finishedAt = Date.now();
+  turnDurations[liveWork.turn] = liveWork.finishedAt - liveWork.startedAt;
+  // El bloque se abre solo mientras hay trabajo en curso; al terminar vuelve
+  // al resumen colapsado salvo que el usuario lo haya abierto después.
+  delete openActivities[liveWork.turn];
+}
+
+function resetWorkState() {
+  liveWork = null;
+  pendingTurn = null;
+  turnDurations = {};
+  openActivities = {};
+  autoApprovalScheduled = false;
+  autoApprovalBlockedAction = null;
+}
+
+function activityToStep(activity) {
+  return {
+    key: activity.kind,
+    title: activity.title,
+    detail: activity.detail,
+    status: activity.status,
+    origin: activity.origin,
+    duration_ms: activity.duration_ms
+  };
+}
+
+function stepsDuration(steps) {
+  return steps.reduce(function (total, step) {
+    return total + (step.duration_ms || 0);
+  }, 0);
+}
+
+function buildTurns() {
+  var turns = [];
+  var current = null;
+  state.messages.forEach(function (message, index) {
+    if (index === 0 && message.author === "agent") { return; }
+    if (message.author === "user") {
+      current = {number:turns.length + 1, user:message, agent:[]};
+      turns.push(current);
+      return;
+    }
+    if (!current) {
+      current = {number:turns.length + 1, user:null, agent:[]};
+      turns.push(current);
+    }
+    current.agent.push(message);
+  });
+  if (pendingTurn) {
+    turns.push({number:turns.length + 1, user:{text:pendingTurn.text}, agent:[]});
+  }
+  (state.activities || []).forEach(function (activity) {
+    var turn = turns[activity.turn - 1] || turns[turns.length - 1];
+    if (!turn) { return; }
+    turn.activities = turn.activities || [];
+    turn.activities.push(activity);
+  });
+  if (liveWork) {
+    var liveTurn = turns[liveWork.turn - 1] || turns[turns.length - 1];
+    if (liveTurn) { liveTurn.live = liveWork; }
+  }
+  return turns;
+}
+
+function render() {
+  if (!state) { return; }
+  renderModelStatus();
+  if (state.agent_mode) {
+    $("agentModeSelector").value = state.agent_mode;
+    $("agentModeChip").textContent =
+      $("agentModeSelector").options[$("agentModeSelector").selectedIndex].text;
+  }
+  var awaitingProject = state.state === "esperando_ruta";
+  $("agentModeSelector").disabled = !awaitingProject;
+  $("analysisModeSelector").disabled = !awaitingProject;
+  $("contextBtn").disabled = state.state !== "esperando_ruta";
+  updateSelectorHints();
+
+  var readyCount = state.ready_items.length;
+  $("panelCount").textContent = String(readyCount);
+  $("panelCount").hidden = readyCount === 0;
+  $("newSessionBtn").disabled = !!(liveWork && liveWork.running) || !!pendingTurn;
+  $("welcome").hidden = !!pendingTurn || state.messages.some(function (message) {
+    return message.author === "user";
+  });
+  $("downloadReportBtn").hidden = state.state !== "completa";
+
+  if (liveWork && !liveWork.finishedAt && !state.pending_action &&
+      (state.state === "completa" || state.state === "bloqueada")) {
+    finishLiveWork();
+  }
+
+  renderSummaryMetrics();
+  renderChat();
+  renderReady();
+  renderDocs();
+  renderPatches();
+  renderEvidence();
+
+  var working = !!pendingTurn || !!(liveWork && liveWork.running);
+  var input = $("messageInput");
+  input.disabled = !!state.pending_action || working ||
+    state.state === "completa" || state.state === "bloqueada";
+  input.placeholder = working
+    ? (liveWork && liveWork.current ? liveWork.current.title + "…" : "Pensando…")
+    : state.pending_action
+      ? "Esperando tu autorización…"
+      : state.state === "completa"
+        ? "La auditoría terminó; inicia una nueva revisión"
+        : state.state === "bloqueada"
+          ? "La revisión se detuvo; inicia una nueva sesión"
+          : "Escribe una instrucción o pregunta";
+  var send = $("sendBtn");
+  send.disabled = input.disabled || working;
+  send.classList.toggle("is-working", working);
+  send.setAttribute("aria-busy", String(working));
+  send.setAttribute("aria-label", working ? "Acciones en curso" : "Enviar mensaje");
+  send.title = working ? "AudiAI está trabajando" : "Enviar mensaje";
+  renderContextAttachment();
+  scheduleAutomaticApproval();
+}
+
+function renderChat() {
+  var host = $("chatLog");
+  host.replaceChildren();
+  var turns = buildTurns();
+  var lastBlock = null;
+  turns.forEach(function (turn) {
+    var block = renderTurn(turn);
+    if (block) {
+      host.appendChild(block);
+      lastBlock = block;
+    }
+  });
+  if (state.pending_action && !(liveWork && liveWork.running)) {
+    var card = renderPendingCard(state.pending_action);
+    if (lastBlock) { lastBlock.appendChild(card); }
+    else { host.appendChild(card); }
+  }
+  var area = $("chatArea");
+  area.scrollTop = area.scrollHeight;
+}
+
+function renderTurn(turn) {
+  var hasWork = !!turn.live || !!(turn.activities && turn.activities.length);
+  if (!turn.user && !turn.agent.length && !hasWork) { return null; }
+
+  var block = element("section", "turn");
+  block.dataset.turn = String(turn.number);
+  if (turn.user) {
+    var bubble = element("article", "msg user");
+    bubble.setAttribute("aria-label", "Tu mensaje");
+    var copy = element("div", "message-copy");
+    renderFormattedMessage(copy, turn.user.text);
+    bubble.appendChild(copy);
+    block.appendChild(bubble);
+  }
+
+  if (hasWork) { block.appendChild(renderWorkBlock(turn)); }
+
+  if (pendingTurn && !pendingTurn.isAudit && turn.number === activeTurnNumber()) {
+    var typing = element("article", "msg agent");
+    var draft = element("div", "message-copy");
+    draft.id = "streamingDraft";
+    if (pendingTurn.draft) {
+      // Ya hay texto del modelo: se muestra como respuesta, sin "Pensando…".
+      renderFormattedMessage(draft, pendingTurn.draft);
+      typing.appendChild(draft);
+    } else {
+      var indicator = element("div", "typing-indicator");
+      indicator.appendChild(element("span"));
+      indicator.appendChild(element("span"));
+      indicator.appendChild(element("span"));
+      typing.appendChild(indicator);
+    }
+    block.appendChild(typing);
+    return block;
+  }
+
+  if (turn.agent.length) {
+    var visible = hasWork ? turn.agent.slice(-1) : turn.agent;
+    visible.forEach(function (message) {
+      var reply = element("article", "msg agent");
+      reply.setAttribute("aria-label", "Respuesta de AudiAI");
+      var body = element("div", "message-copy");
+      renderFormattedMessage(body, message.text);
+      reply.appendChild(body);
+      block.appendChild(reply);
+    });
+  }
+  return block;
+}
+
+function renderWorkBlock(turn) {
+  var live = turn.live;
+  var steps = live
+    ? live.steps
+    : (turn.activities || []).map(activityToStep);
+  if (!steps.length) { return null; }
+
+  var finished = live ? !!live.finishedAt : true;
+  var running = !!(live && live.running);
+  var waiting = !!(live && !finished && !running && state.pending_action);
+  var details = element("details", "activity-disclosure");
+  details.dataset.turn = String(turn.number);
+  if (running) {
+    details.open = true;
+  } else if (waiting) {
+    // Al pedir permiso, el resumen debe quedar visible y el detalle a un clic.
+    details.open = false;
+  } else {
+    details.open = openActivities[turn.number] !== undefined
+      ? openActivities[turn.number]
+      : false;
+  }
+  details.setAttribute("aria-busy", String(running || waiting));
+
+  var summary = element("summary", "activity-summary");
+  if (running) {
+    summary.appendChild(element("span", "activity-spinner", ""));
+  } else if (waiting) {
+    summary.appendChild(element("span", "activity-wait", ""));
+  } else {
+    var check = element("span", "activity-check", "✓");
+    check.setAttribute("aria-hidden", "true");
+    summary.appendChild(check);
+  }
+
+  var title;
+  if (running) {
+    title = (live.current ? live.current.title : "Trabajando") + "…";
+  } else if (waiting) {
+    title = "Esperando tu autorización";
+  } else {
+    var elapsed = live && live.finishedAt
+      ? turnDurations[turn.number]
+      : stepsDuration(steps);
+    title = "Trabajó durante " + formatDuration(elapsed || 0);
+  }
+  summary.appendChild(element("span", "activity-title", title));
+
+  if (running) {
+    var clock = element("span", "activity-elapsed");
+    clock.dataset.workElapsed = "1";
+    clock.textContent = "· " + formatDuration(Date.now() - live.startedAt);
+    summary.appendChild(clock);
+  } else {
+    summary.appendChild(element(
+      "span",
+      "activity-elapsed",
+      "· " + counted(steps.length, "paso", "pasos")
+    ));
+  }
+  details.appendChild(summary);
+
+  var body = element("div", "activity-body");
+  var list = element("div", "activity-steps");
+  steps.forEach(function (step) {
+    list.appendChild(renderStep(step));
+  });
+  body.appendChild(list);
+
+  if (turn.agent.length > 1 || (hasWorkNotes(turn))) {
+    var notes = element("details", "activity-notes");
+    notes.appendChild(element("summary", "", "Lo que hizo el agente"));
+    var noteList = element("div", "activity-note-list");
+    var narration = turn.agent.length > 1 ? turn.agent.slice(0, -1) : turn.agent;
+    narration.forEach(function (message) {
+      var note = element("div", "activity-note");
+      renderFormattedMessage(note, message.text);
+      noteList.appendChild(note);
+    });
+    if (narration.length) {
+      notes.appendChild(noteList);
+      body.appendChild(notes);
+    }
+  }
+
+  body.appendChild(element(
+    "span",
+    "activity-footnote",
+    "Registro de acciones reales; no incluye razonamiento interno privado del modelo."
+  ));
+  details.appendChild(body);
+  return details;
+}
+
+function hasWorkNotes(turn) {
+  return !!turn.live && turn.agent.length > 1;
+}
+
+function renderStep(step) {
+  var row = element("div", "activity-step");
+  row.dataset.status = step.status === "running" ? "running" : step.status;
+  var marker = element("span", "step-marker");
+  if (step.status === "fallida") { marker.textContent = "!"; }
+  else if (step.status === "omitida") { marker.textContent = "–"; }
+  else if (step.status !== "running") { marker.textContent = "✓"; }
+  marker.setAttribute("aria-hidden", "true");
+  row.appendChild(marker);
+
+  var copy = element("div", "step-copy");
+  copy.appendChild(element("strong", "", step.title));
+  copy.appendChild(element("span", "", step.detail));
+  if (step.origin) {
+    copy.appendChild(element("span", "step-origin", step.origin));
+  }
+  row.appendChild(copy);
+  return row;
+}
+
+function renderPendingCard(pending) {
+  var card = element("div", "action-card");
+  var pendingIndex = stageIndex(pending.kind);
+  var sensitive = pending.kind === "sensitive";
+  var externalConsent = (pending.kind === "security" ||
+    (pending.kind === "analysis" && state.agent_mode === "agent")) &&
+    usesExternalModel() && !state.external_data_consent;
+  card.appendChild(element("div", "action-eyebrow",
+    sensitive ? "PERMISO PARA ARCHIVOS CONFIDENCIALES" :
+    externalConsent ? "PERMISO PARA USAR EL MODELO CONECTADO" :
+    "ETAPA " + (pendingIndex + 1) + " DE " + activeWorkflowStages().length));
+  card.appendChild(element("div", "caption", pending.caption));
+  card.appendChild(element("div", "hint", pending.hint));
+  if (sensitive || externalConsent) {
+    var modelLabel = currentModelLabel();
+    var disclosure = sensitive
+      ? "Solo se abrirán los archivos enumerados arriba. No se modificarán."
+      : "La evidencia y el contexto autorizado se enviarán al modelo conectado" +
+        (modelLabel ? " (" + modelLabel + ")" : "") + ". " +
+        (state.sensitive_read_approved
+          ? "Esto incluye los archivos confidenciales que autorizaste leer. "
+          : "") +
+        "No se enviará nada hasta que lo autorices.";
+    card.appendChild(element("div", "approval-note", disclosure));
+  }
+  var approve = element(
+    "button",
+    "btn primary",
+    sensitive ? "Autorizar lectura" :
+    externalConsent ? "Autorizar IA y continuar" :
+    autoApprovalBlockedAction === pending.action_id ? "Reintentar" :
+    "Continuar"
+  );
+  approve.type = "button";
+  approve.dataset.actionId = pending.action_id;
+  approve.addEventListener("click", onApprove);
+  card.appendChild(approve);
+  if (sensitive || externalConsent) {
+    var skip = element("button", "btn secondary",
+      sensitive ? "Omitir archivos" : "Continuar sin IA externa");
+    skip.type = "button";
+    skip.dataset.actionId = pending.action_id;
+    skip.addEventListener("click", onSkip);
+    card.appendChild(skip);
+  }
+  return card;
+}
+
+function renderContextAttachment() {
+  var attachment = $("contextAttachment");
+  var removeButton = $("removeContextBtn");
+  attachment.hidden = !selectedProjectFolder;
+  if (!selectedProjectFolder) { return; }
+  var folderName = selectedProjectFolder.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+  $("contextAttachmentLabel").textContent = "Proyecto · " + (folderName || selectedProjectFolder);
+  attachment.title = selectedProjectFolder;
+  removeButton.disabled = state.state !== "esperando_ruta" ||
+    !!pendingTurn || !!(liveWork && liveWork.running);
+}
+
+function setWelcomeName(name) {
+  var hour = new Date().getHours();
+  var greeting = hour < 12 ? "Buenos días" : hour < 18 ? "Buenas tardes" : "Buenas noches";
+  var cleanName = typeof name === "string" ? name.trim() : "";
+  $("welcomeGreeting").textContent = cleanName
+    ? greeting + ", " + cleanName
+    : greeting;
+}
+
+function renderModelStatus() {
+  var configured = state.roles_provider === "strands";
+  var openRouter = state.roles_provider === "openrouter";
+  var localModel = state.roles_provider === "lmstudio";
+  var reportedModel = state.chat_model || state.analysis_model;
+  var displayModel = reportedModel || state.configured_model || "";
+  var selector = $("modelSelector");
+  var nextSelection = modelChoiceInitialized
+    ? selector.value || selectedModel
+    : "local";
+  selector.replaceChildren();
+  if (openRouter) {
+    selector.appendChild(new Option(
+      displayModel ? formatModelName(displayModel) : "Modelo conectado",
+      "external"
+    ));
+  } else {
+    selector.appendChild(new Option(
+      localModel ? "LM Studio · local" : "Auto",
+      "local"
+    ));
+  }
+  if (configured) {
+    selector.appendChild(new Option("OpenRouter", "external"));
+  }
+  selectedModel = openRouter
+    ? "external"
+    : configured && nextSelection === "external" ? "external" : "local";
+  modelChoiceInitialized = true;
+  selector.value = selectedModel;
+  selector.disabled = !!state.external_data_consent || openRouter;
+  var label = displayModel
+    ? formatModelName(displayModel)
+    : selectedModel === "external" ? "Modelo conectado" : "Auto";
+  $("modelChip").textContent = label;
+
+  var badge = $("providerBadge");
+  if (openRouter) {
+    badge.textContent = displayModel
+      ? formatModelName(displayModel)
+      : "Modelo conectado";
+    badge.className = "mode-badge is-real";
+  } else if (configured) {
+    badge.textContent = "Subagente IA conectado";
+    badge.className = "mode-badge is-real";
+  } else if (localModel) {
+    badge.textContent = "Modelo local · LM Studio";
+    badge.className = "mode-badge is-local";
+  } else {
+    badge.textContent = "Modo simulado · sin red";
+    badge.className = "mode-badge is-mock";
+  }
+  updateSelectorHints();
+}
+
+function formatModelName(modelId) {
+  var name = modelId.split("/").pop();
+  return name.replace(/^qwen(?=\d)/i, "Qwen ");
+}
+
+function updateSelectorHints() {
+  var analysisHints = {
+    reading: "Lectura: describe el código y los hechos observables.",
+    research: "Investigación: relaciona causas con evidencia; sin búsqueda web.",
+    unspecified: "Sin especificar: el agente elige el enfoque."
+  };
+  var agentHints = {
+    agent: "Agente: un análisis; informe y recomendaciones locales.",
+    multiagent: "Multiagente: especialistas coordinados por etapas."
+  };
+  $("analysisModeHint").textContent = analysisHints[$("analysisModeSelector").value];
+  $("agentModeHint").textContent = agentHints[$("agentModeSelector").value];
+  $("modelDescription").textContent = selectedModel === "external"
+    ? (currentModelLabel()
+      ? "El modelo " + currentModelLabel() +
+        " recibe evidencia solo después de tu autorización."
+      : "El modelo conectado recibe evidencia solo después de tu autorización.")
+    : state.roles_provider === "lmstudio"
+      ? "Modelo local: las solicitudes se envían a LM Studio en este equipo."
+      : state.roles_provider === "strands" || state.roles_provider === "openrouter"
+      ? "Auto evita el envío externo; la auditoría continúa localmente."
+      : "Auto usa el modo simulado; no hay proveedor conectado.";
+}
+
+function currentModelLabel() {
+  var model = state.chat_model || state.analysis_model ||
+    state.configured_model || "";
+  return model ? formatModelName(model) : "";
+}
+
+function usesExternalModel() {
+  return state.roles_provider === "openrouter" ||
+    (state.roles_provider === "strands" && selectedModel === "external");
 }
 
 function activeWorkflowStages() {
@@ -250,6 +866,12 @@ function activeWorkflowStages() {
       return ["list", "checks", "analysis"].indexOf(stage.id) !== -1;
     })
     : workflowStages;
+}
+
+function stageIndex(stageId) {
+  return activeWorkflowStages().findIndex(function (stage) {
+    return stage.id === stageId;
+  });
 }
 
 function failedStageIndex() {
@@ -299,282 +921,6 @@ function renderSummaryMetrics() {
     item.appendChild(element("span", "", metric.label));
     host.appendChild(item);
   });
-}
-
-function render() {
-  if (!state) { return; }
-  renderModelStatus();
-  if (state.agent_mode) {
-    $("agentModeSelector").value = state.agent_mode;
-    $("agentModeChip").textContent =
-      $("agentModeSelector").options[$("agentModeSelector").selectedIndex].text;
-  }
-  var awaitingProject = state.state === "esperando_ruta";
-  $("agentModeSelector").disabled = !awaitingProject;
-  $("analysisModeSelector").disabled = !awaitingProject;
-  $("contextBtn").disabled = state.state !== "esperando_ruta";
-  updateSelectorHints();
-  var readyCount = state.ready_items.length;
-  $("panelCount").textContent = String(readyCount);
-  $("panelCount").hidden = readyCount === 0;
-  $("newSessionBtn").disabled = !!activityStatus;
-  $("welcome").hidden = !!pendingTurn || state.messages.some(function (message) {
-    return message.author === "user";
-  });
-  $("downloadReportBtn").hidden = state.state !== "completa";
-  renderSummaryMetrics();
-
-  var log = $("chatLog");
-  var activityWasOpen = !!$("activityDisclosure") && $("activityDisclosure").open;
-  log.replaceChildren();
-  var auditInProgress = !!state.pending_action || state.ready_items.length > 0 ||
-    state.state === "completa" || state.state === "bloqueada";
-  var latestAgentMessage = -1;
-  if (state.state === "completa" || state.state === "bloqueada") {
-    for (var messageIndex = state.messages.length - 1; messageIndex >= 0; messageIndex -= 1) {
-      if (state.messages[messageIndex].author === "agent") {
-        latestAgentMessage = messageIndex;
-        break;
-      }
-    }
-  }
-  state.messages.forEach(function (message, index) {
-    if (message.author === "agent" && index === 0) { return; }
-    if (auditInProgress && message.author === "agent" &&
-        (latestAgentMessage < 0 || index !== latestAgentMessage)) { return; }
-    var bubble = element("article", "msg " + message.author);
-    bubble.setAttribute(
-      "aria-label",
-      message.author === "agent" ? "Respuesta de AudiAI" : "Tu mensaje"
-    );
-    var copy = element("div", "message-copy");
-    renderFormattedMessage(copy, message.text);
-    bubble.appendChild(copy);
-    log.appendChild(bubble);
-  });
-
-  if (pendingTurn) {
-    var userBubble = element("article", "msg user");
-    userBubble.setAttribute("aria-label", "Tu mensaje");
-    var userCopy = element("div", "message-copy");
-    renderFormattedMessage(userCopy, pendingTurn.text);
-    userBubble.appendChild(userCopy);
-    log.appendChild(userBubble);
-  }
-
-  renderActivityDisclosure(log, activityWasOpen);
-  if (!activityStatus && state.pending_action) {
-    var pending = state.pending_action;
-    var card = element("div", "action-card");
-    var pendingIndex = stageIndex(pending.kind);
-    var sensitive = pending.kind === "sensitive";
-    var externalConsent = (pending.kind === "security" ||
-      (pending.kind === "analysis" && state.agent_mode === "agent")) &&
-      state.roles_provider === "strands" && !state.external_data_consent;
-    card.appendChild(element("div", "action-eyebrow",
-      sensitive ? "PERMISO PARA ARCHIVOS CONFIDENCIALES" :
-      externalConsent ? "PERMISO PARA USAR EL MODELO CONECTADO" :
-      "ETAPA " + (pendingIndex + 1) + " DE " + activeWorkflowStages().length));
-    card.appendChild(element("div", "caption", pending.caption));
-    card.appendChild(element("div", "hint", pending.hint));
-    if (sensitive || externalConsent) {
-      var disclosure = sensitive
-        ? "Solo se abrirán los archivos enumerados arriba. No se modificarán."
-        : "La evidencia y el contexto autorizado se enviarán al proveedor externo indicado abajo. " +
-          (state.sensitive_read_approved
-            ? "Esto incluye los archivos confidenciales que autorizaste leer. "
-            : "") +
-          "No se enviará nada hasta que lo autorices.";
-      card.appendChild(element("div", "approval-note", disclosure));
-    }
-    var approve = element(
-      "button",
-      "btn primary",
-      sensitive ? "Autorizar lectura" :
-      externalConsent ? "Autorizar IA y continuar" :
-      autoApprovalBlockedAction === pending.action_id ? "Reintentar" :
-      "Continuar"
-    );
-    approve.type = "button";
-    approve.dataset.actionId = pending.action_id;
-    approve.addEventListener("click", onApprove);
-    card.appendChild(approve);
-    if (sensitive || externalConsent) {
-      var skip = element("button", "btn secondary",
-        sensitive ? "Omitir archivos" : "Continuar sin IA externa");
-      skip.type = "button";
-      skip.dataset.actionId = pending.action_id;
-      skip.addEventListener("click", onSkip);
-      card.appendChild(skip);
-    }
-    log.appendChild(card);
-  }
-  $("chatArea").scrollTop = $("chatArea").scrollHeight;
-
-  renderReady();
-  renderDocs();
-  renderPatches();
-  renderEvidence();
-  var input = $("messageInput");
-  input.disabled = !!state.pending_action || !!activityStatus || !!pendingTurn ||
-    state.state === "completa" || state.state === "bloqueada";
-  input.placeholder = state.state === "esperando_ruta"
-    ? activityStatus
-      ? activityStatus.title + "…"
-      : "Escribe una instrucción o pregunta"
-    : state.pending_action
-      ? activityStatus
-        ? activityStatus.title + "…"
-        : "Waiting for approval…"
-      : "La auditoría terminó";
-  var isWorking = !!activityStatus || !!pendingTurn;
-  $("sendBtn").disabled = state.state === "completa" ||
-    state.state === "bloqueada" ||
-    (!isWorking && !!state.pending_action);
-  $("sendBtn").classList.toggle("is-working", isWorking);
-  $("sendBtn").setAttribute("aria-busy", String(isWorking));
-  $("sendBtn").setAttribute(
-    "aria-label",
-    isWorking ? "Mostrar las acciones en curso" : "Enviar mensaje"
-  );
-  $("sendBtn").title = isWorking
-    ? "Mostrar las acciones en curso"
-    : "Enviar mensaje";
-  renderContextAttachment();
-  scheduleAutomaticApproval();
-}
-
-function renderContextAttachment() {
-  var attachment = $("contextAttachment");
-  var removeButton = $("removeContextBtn");
-  attachment.hidden = !selectedProjectFolder;
-  if (!selectedProjectFolder) { return; }
-  var folderName = selectedProjectFolder.replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-  $("contextAttachmentLabel").textContent = "Proyecto · " + (folderName || selectedProjectFolder);
-  attachment.title = selectedProjectFolder;
-  removeButton.disabled = state.state !== "esperando_ruta" || !!pendingTurn || !!activityStatus;
-}
-
-function renderActivityDisclosure(host, wasOpen) {
-  var entries = state.ready_items || [];
-  var agentNotes = state.messages.filter(function (message, index) {
-    return message.author === "agent" && message.text &&
-      index > 0;
-  });
-  if (!entries.length && !activityStatus) { return; }
-
-  var disclosure = element("details", "activity-disclosure");
-  disclosure.id = "activityDisclosure";
-  disclosure.open = wasOpen;
-  var summary = element("summary", "activity-summary");
-  if (activityStatus) {
-    summary.appendChild(element("span", "activity-spinner", ""));
-    summary.appendChild(element("span", "activity-title", activityStatus.title));
-  } else {
-    summary.appendChild(element(
-      "span",
-      "activity-title",
-      "Actividad · " + entries.length + " etapas"
-    ));
-  }
-  disclosure.appendChild(summary);
-  disclosure.setAttribute("aria-busy", String(!!activityStatus));
-  var list = element("div", "activity-list");
-  if (activityStatus) {
-    var current = element("div", "activity-entry");
-    current.setAttribute("role", "status");
-    current.setAttribute("aria-live", "polite");
-    current.appendChild(element("strong", "", activityStatus.title));
-    current.appendChild(element("span", "", activityStatus.detail));
-    list.appendChild(current);
-  }
-  entries.forEach(function (item) {
-    var entry = element("div", "activity-entry");
-    entry.appendChild(element("strong", "", item.title));
-    entry.appendChild(element("span", "", item.detail + " · " + item.origin));
-    list.appendChild(entry);
-  });
-  if (agentNotes.length) {
-    var notes = element("details", "activity-notes");
-    notes.appendChild(element("summary", "", "Actualizaciones del proceso"));
-    var noteList = element("ul", "");
-    agentNotes.forEach(function (message) {
-      noteList.appendChild(element("li", "", message.text));
-    });
-    notes.appendChild(noteList);
-    list.appendChild(notes);
-  }
-  list.appendChild(element(
-    "span",
-    "activity-footnote",
-    "Registro de acciones y resúmenes; no incluye razonamiento interno privado del modelo."
-  ));
-  disclosure.appendChild(list);
-  host.appendChild(disclosure);
-}
-
-function setWelcomeName(name) {
-  var hour = new Date().getHours();
-  var greeting = hour < 12 ? "Buenos días" : hour < 18 ? "Buenas tardes" : "Buenas noches";
-  var cleanName = typeof name === "string" ? name.trim() : "";
-  $("welcomeGreeting").textContent = cleanName
-    ? greeting + ", " + cleanName
-    : greeting;
-}
-
-function renderModelStatus() {
-  var configured = state.roles_provider === "strands";
-  var localModel = state.roles_provider === "lmstudio";
-  var reportedModel = state.chat_model || state.analysis_model;
-  var selector = $("modelSelector");
-  var nextSelection = modelChoiceInitialized
-    ? selector.value || selectedModel
-    : "local";
-  selector.replaceChildren();
-  selector.appendChild(new Option(
-    localModel ? "LM Studio · local" : "Auto",
-    "local"
-  ));
-  if (configured) {
-    selector.appendChild(new Option("OpenRouter", "external"));
-  }
-  selectedModel = configured && nextSelection === "external" ? "external" : "local";
-  modelChoiceInitialized = true;
-  selector.value = selectedModel;
-  selector.disabled = !!state.external_data_consent;
-  var label = reportedModel
-    ? formatModelName(reportedModel)
-    : selectedModel === "external" ? "OpenRouter" : "Auto";
-  $("modelChip").textContent = label;
-  updateSelectorHints();
-}
-
-function formatModelName(modelId) {
-  var name = modelId.split("/").pop();
-  return name.replace(/^qwen(?=\d)/i, "Qwen ");
-}
-
-function updateSelectorHints() {
-  var analysisHints = {
-    reading: "Lectura: describe el código y los hechos observables.",
-    research: "Investigación: relaciona causas con evidencia; sin búsqueda web.",
-    unspecified: "Sin especificar: el agente elige el enfoque."
-  };
-  var agentHints = {
-    agent: "Agente: un análisis; informe y recomendaciones locales.",
-    multiagent: "Multiagente: especialistas coordinados por etapas."
-  };
-  $("analysisModeHint").textContent =
-    analysisHints[$("analysisModeSelector").value];
-  $("agentModeHint").textContent =
-    agentHints[$("agentModeSelector").value];
-  $("modelDescription").textContent = selectedModel === "external"
-    ? "OpenRouter comparte evidencia solo después de tu autorización."
-    : state.roles_provider === "lmstudio"
-      ? "Modelo local: las solicitudes se envían a LM Studio en este equipo."
-      : state.roles_provider === "strands"
-      ? "Auto evita el envío externo; la auditoría continúa localmente."
-      : "Auto usa el modo simulado; no hay proveedor conectado.";
 }
 
 function renderReady() {
@@ -715,7 +1061,7 @@ function needsUserApproval(action) {
   }
   return (action.kind === "security" ||
     (action.kind === "analysis" && $("agentModeSelector").value === "agent")) &&
-    state.roles_provider === "strands" && selectedModel === "external" &&
+    usesExternalModel() &&
     !state.external_data_consent;
 }
 
@@ -731,14 +1077,16 @@ function shouldSkipAutomatically(action) {
 function scheduleAutomaticApproval() {
   var action = state && state.pending_action;
   if (
-    !action || activityStatus || needsUserApproval(action) ||
+    !action || pendingTurn || (liveWork && liveWork.running) ||
+    needsUserApproval(action) ||
     autoApprovalBlockedAction === action.action_id || autoApprovalScheduled
   ) { return; }
   autoApprovalScheduled = true;
   window.setTimeout(function () {
     autoApprovalScheduled = false;
     if (state && state.pending_action &&
-        state.pending_action.action_id === action.action_id) {
+        state.pending_action.action_id === action.action_id &&
+        !(liveWork && liveWork.running)) {
       if (shouldSkipAutomatically(action)) { onSkip(null, true); }
       else { onApprove(null, true); }
     }
@@ -746,70 +1094,101 @@ function scheduleAutomaticApproval() {
 }
 
 async function onApprove(event, automatic) {
-  if (!state || !state.pending_action || activityStatus) { return; }
+  if (!state || !state.pending_action || pendingTurn ||
+      (liveWork && liveWork.running)) { return; }
   var pending = state.pending_action;
   autoApprovalBlockedAction = null;
-  var activityCopy = {
-    list: ["Reading files", "Leyendo archivos permitidos en modo de solo lectura."],
-    sensitive: ["Reading approved files", "Leyendo únicamente los archivos confidenciales autorizados."],
-    checks: ["Analyzing code", "Ejecutando comprobaciones locales sobre el contenido permitido."],
-    security: ["Analyzing security", "Evaluando los riesgos a partir de evidencia autorizada."],
-    analysis: [
-      "Analyzing causes",
-      "Relacionando el problema con la evidencia autorizada."
-    ],
-    sources: ["Checking local sources", "Revisando procedencia y referencias locales; sin búsqueda web."],
-    docs: ["Writing report", "Redactando el informe a partir de los resultados obtenidos."],
-    patches: ["Preparing recommendations", "Preparando sugerencias; no se modifican archivos."],
-    review: ["Reviewing findings", "Contrastando las conclusiones con la evidencia disponible."]
-  }[pending.kind] || ["Processing", "Procesando esta etapa de la revisión."];
-  activityStatus = {title:activityCopy[0], detail:activityCopy[1]};
+  ensureLiveWork(activeTurnNumber());
+  var copy = STEP_COPY[pending.kind] || {
+    label:"Procesando",
+    detail:"Ejecutando esta etapa de la revisión."
+  };
+  beginStep(pending.kind, copy.label, copy.detail);
   render();
-  await new Promise(function (resolve) {
-    window.requestAnimationFrame(function () { window.requestAnimationFrame(resolve); });
-  });
+  var started = Date.now();
+  var beforeActivities = (state.activities || []).length;
+  await paint();
+
   var updated = await post(
     "/agent/sessions/" + encodeURIComponent(state.session_id) +
-    "/approve/" + encodeURIComponent(pending.action_id)
+    "/approve/" + encodeURIComponent(pending.action_id),
+    {},
+    {quiet:true}
   );
-  activityStatus = null;
-  if (updated) { state = updated; render(); }
-  else {
-    if (automatic) { autoApprovalBlockedAction = pending.action_id; }
-    await reconcileSession("La acción pudo completarse; sincronizando el estado.");
-    render();
+  if (!updated) {
+    updated = await fetchSession();
   }
+  var activity = updated ? lastActivity(updated, pending.kind) : null;
+  var elapsed = Date.now() - started;
+  if (elapsed < MIN_STEP_MS) { await wait(MIN_STEP_MS - elapsed); }
+  completeStep(
+    activity ? activity.status : "fallida",
+    activity ? activity.detail : "No se pudo confirmar el resultado con el servidor.",
+    activity ? activity.origin : "fallo declarado"
+  );
+  if (updated) {
+    state = updated;
+    render();
+    if ((updated.activities || []).length <= beforeActivities &&
+        updated.pending_action &&
+        updated.pending_action.action_id === pending.action_id) {
+      showToast("La etapa no se completó; puedes reintentarla.");
+    }
+    return;
+  }
+  if (automatic) { autoApprovalBlockedAction = pending.action_id; }
+  render();
+  showToast("La acción pudo completarse; sincronizando el estado.");
 }
 
 async function onSkip(event, automatic) {
-  if (!state || !state.pending_action || activityStatus) { return; }
+  if (!state || !state.pending_action || pendingTurn ||
+      (liveWork && liveWork.running)) { return; }
   var pending = state.pending_action;
-  activityStatus = {
-    title:pending.kind === "sensitive" ? "Skipping sensitive files" : "Continuing locally",
-    detail:"No se leerán archivos omitidos ni se enviará evidencia al proveedor."
-  };
+  ensureLiveWork(activeTurnNumber());
+  beginStep(
+    pending.kind,
+    pending.kind === "sensitive" ? "Omitiendo archivos" : "Continuando sin IA externa",
+    "No se leerán archivos omitidos ni se enviará evidencia al proveedor."
+  );
   render();
+  var started = Date.now();
+  var beforeActivities = (state.activities || []).length;
+  await paint();
   var updated = await post(
     "/agent/sessions/" + encodeURIComponent(state.session_id) +
-    "/skip/" + encodeURIComponent(pending.action_id)
+    "/skip/" + encodeURIComponent(pending.action_id),
+    {},
+    {quiet:true}
   );
-  activityStatus = null;
-  if (updated) { state = updated; render(); }
-  else {
-    if (automatic) { autoApprovalBlockedAction = pending.action_id; }
-    await reconcileSession("No se pudo completar la decisión; sincronizando.");
+  if (!updated) { updated = await fetchSession(); }
+  var activity = updated ? lastActivity(updated, pending.kind) : null;
+  var elapsed = Date.now() - started;
+  if (elapsed < MIN_STEP_MS) { await wait(MIN_STEP_MS - elapsed); }
+  completeStep(
+    activity ? activity.status : "omitida",
+    activity ? activity.detail : "La etapa se omitió por decisión del usuario.",
+    activity ? activity.origin : "decisión del usuario"
+  );
+  if (updated) {
+    state = updated;
     render();
+    if ((updated.activities || []).length <= beforeActivities &&
+        updated.pending_action &&
+        updated.pending_action.action_id === pending.action_id) {
+      showToast("No se pudo registrar la decisión; revisa el estado.");
+    }
+    return;
   }
+  if (automatic) { autoApprovalBlockedAction = pending.action_id; }
+  render();
+  showToast("No se pudo completar la decisión; sincronizando.");
 }
 
 async function onSend(event) {
   event.preventDefault();
   if (!state) { return; }
-  if (activityStatus || pendingTurn) {
-    var activity = $("activityDisclosure");
-    if (activity) { activity.open = !activity.open; }
-    return;
-  }
+  if (pendingTurn || (liveWork && liveWork.running)) { return; }
   if (state.pending_action) { return; }
   var input = $("messageInput");
   var text = input.value.trim();
@@ -817,20 +1196,21 @@ async function onSend(event) {
   var attachedProject = state.state === "esperando_ruta" ? selectedProjectFolder : null;
   var startsAudit = !!attachedProject ||
     /^[A-Za-z]:[\\/]|^\\\\|^\/|^\.{1,2}[\\/]|^~[\\/]/.test(text);
-  pendingTurn = {text:text, isAudit:startsAudit};
-  activityStatus = startsAudit
-    ? {
-      title:"Reading files",
-      detail:"Comprobando la carpeta y leyendo archivos permitidos."
-    }
-    : {
-      title:"Thinking",
-      detail:"Preparando respuesta."
-    };
+
+  pendingTurn = {text:text, isAudit:startsAudit, draft:""};
+  if (startsAudit) {
+    ensureLiveWork(activeTurnNumber());
+    beginStep(
+      "think",
+      STEP_COPY.think.label,
+      startsAudit
+        ? "Comprobando la carpeta y preparando la lectura en solo lectura."
+        : STEP_COPY.think.detail
+    );
+  }
   render();
-  await new Promise(function (resolve) {
-    window.requestAnimationFrame(resolve);
-  });
+  await paint();
+
   var messageUrl = "/agent/sessions/" +
     encodeURIComponent(state.session_id) + "/messages";
   var messageBody = {
@@ -839,32 +1219,49 @@ async function onSend(event) {
     agent_mode:$("agentModeSelector").value
   };
   if (attachedProject) { messageBody.project_path = attachedProject; }
+
   var updated = !startsAudit && state.state === "esperando_ruta"
-    ? await postChatStream(messageUrl + "/stream", messageBody, function () {
-      if (activityStatus && activityStatus.title === "Thinking") {
-        activityStatus = {
-          title:"Responding",
-          detail:"Redactando respuesta."
-        };
-        render();
+    ? await postChatStream(messageUrl + "/stream", messageBody, function (delta) {
+      if (pendingTurn) {
+        pendingTurn.draft += delta;
+        var draft = $("streamingDraft");
+        if (draft) {
+          renderFormattedMessage(draft, pendingTurn.draft);
+          var area = $("chatArea");
+          area.scrollTop = area.scrollHeight;
+        }
       }
     })
     : await post(messageUrl, messageBody);
-  activityStatus = null;
-  pendingTurn = null;
-  if (updated) { state = updated; input.value = ""; render(); }
-  else {
-    render();
-    await reconcileSession("Sincronizando la conversación con el servidor.");
+
+  if (startsAudit && liveWork && liveWork.current) {
+    completeStep("completada", "Solicitud interpretada y alcance registrado.");
   }
+  if (updated) {
+    state = updated;
+    input.value = "";
+    pendingTurn = null;
+    render();
+    return;
+  }
+  if (liveWork && liveWork.current) {
+    completeStep("fallida", "No se pudo confirmar la solicitud con el servidor.");
+  }
+  pendingTurn = null;
+  render();
+  await reconcileSession("Sincronizando la conversación con el servidor.");
 }
 
-async function reconcileSession(message) {
-  if (!state) { return; }
-  var current = await request(
+async function fetchSession() {
+  if (!state) { return null; }
+  return request(
     "/agent/sessions/" + encodeURIComponent(state.session_id),
     {method:"GET"}
   );
+}
+
+async function reconcileSession(message) {
+  var current = await fetchSession();
   if (current) {
     state = current;
     render();
@@ -872,33 +1269,43 @@ async function reconcileSession(message) {
   }
 }
 
-async function newSession() {
-  var created = await post("/agent/sessions");
+async function newSession(announce) {
+  var created = await post("/agent/sessions", {}, {quiet:true});
   if (created) {
     state = created;
     selectedProjectFolder = null;
+    resetWorkState();
+    togglePanel(false);
     render();
     return;
   }
-  // Recover the common case where the server created the session but a local
-  // proxy dropped the POST response. The server is single-user/in-memory for
-  // this demo; newest chat id is the just-created session.
-  var summaries = await request("/agent/sessions", {method:"GET"});
-  if (!summaries || !summaries.length) { return; }
+  // Recupera el caso en que el servidor creó la sesión pero se perdió la
+  // respuesta HTTP: el servidor es de un solo usuario y vive en memoria.
+  var summaries = await request("/agent/sessions", {method:"GET", quiet:true});
+  if (!summaries || !summaries.length) {
+    showToast("No se pudo iniciar una sesión de auditoría.");
+    return;
+  }
   summaries.sort(function (a, b) {
     return Number(b.session_id.replace("chat-", "")) -
       Number(a.session_id.replace("chat-", ""));
   });
   var recovered = await request(
     "/agent/sessions/" + encodeURIComponent(summaries[0].session_id),
-    {method:"GET"}
+    {method:"GET", quiet:true}
   );
   if (recovered) {
     state = recovered;
     selectedProjectFolder = null;
+    resetWorkState();
+    togglePanel(false);
     render();
-    showToast("Sesión recuperada tras una respuesta de red interrumpida.");
+    if (announce) {
+      showToast("Sesión recuperada tras una respuesta de red interrumpida.");
+    }
+    return;
   }
+  showToast("No se pudo recuperar la sesión de auditoría.");
 }
 
 function togglePanel(force) {
@@ -933,12 +1340,18 @@ $("sensitivePolicy").addEventListener("change", function () {
   $("readMenu").open = false;
   render();
 });
-$("newSessionBtn").addEventListener("click", newSession);
+$("newSessionBtn").addEventListener("click", function () { newSession(true); });
 $("panelToggle").addEventListener("click", function () { togglePanel(); });
 $("closePanel").addEventListener("click", function () { togglePanel(false); });
 document.querySelectorAll("[data-panel-tab]").forEach(function (tab) {
   tab.addEventListener("click", function () { setPanelTab(tab.dataset.panelTab); });
 });
+document.addEventListener("toggle", function (event) {
+  var target = event.target;
+  if (!target || !target.classList ||
+      !target.classList.contains("activity-disclosure")) { return; }
+  openActivities[target.dataset.turn] = target.open;
+}, true);
 document.addEventListener("pointerdown", function (event) {
   if (event.target.closest(".selector-menu")) {
     document.querySelectorAll(".selector-menu[open]").forEach(function (menu) {
@@ -967,6 +1380,14 @@ $("messageInput").addEventListener("keydown", function (event) {
     $("messageForm").requestSubmit();
   }
 });
+
+window.setInterval(function () {
+  if (!liveWork || !liveWork.running) { return; }
+  var clock = document.querySelector("[data-work-elapsed]");
+  if (clock) {
+    clock.textContent = "· " + formatDuration(Date.now() - liveWork.startedAt);
+  }
+}, 250);
 
 function enableDesktopContextPicker() {
   if (!desktopControlsReady && window.pywebview && window.pywebview.api) {
@@ -1023,7 +1444,8 @@ $("downloadReportBtn").addEventListener("click", async function () {
 });
 
 $("removeContextBtn").addEventListener("click", function () {
-  if (state && state.state === "esperando_ruta" && !pendingTurn && !activityStatus) {
+  if (state && state.state === "esperando_ruta" && !pendingTurn &&
+      !(liveWork && liveWork.running)) {
     selectedProjectFolder = null;
     renderContextAttachment();
   }

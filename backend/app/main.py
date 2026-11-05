@@ -23,6 +23,7 @@ from app.domain.roles import RoleExecutor
 from app.harness.pipeline import PipelineLimits
 from app.providers.lmstudio import LMStudioRoleExecutor
 from app.providers.mock import MockRoleProvider
+from app.providers.openrouter import OpenRouterRoleExecutor
 from app.providers.strand_bridge import StrandsSubagentExecutor
 from app.services.agent_chat import AgentChatService
 from app.services.audits import InMemoryAuditStore, ManagedAuditRunner
@@ -38,9 +39,10 @@ def build_roles(settings) -> RoleExecutor:
     - ``mock`` (default): ejecutor determinista sin red ni costo. Es el modo
       de demo por defecto y el de todas las pruebas.
     - ``lmstudio``: modelo local vía API compatible de LM Studio en loopback.
+    - ``openrouter``: llamada directa al modelo y la clave de la raíz del repo.
     - ``strands``: subagente real del proyecto de subagentes
       (``AUDIAI_AGENT_ROOT``: su .venv y sus prompts por rol). La clave de
-      OpenRouter vive en el ``.env`` del subagente; AudiAI no la lee nunca.
+      OpenRouter de ese modo vive en el ``.env`` del subagente.
 
     Configuración errónea aborta el arranque: correr mock sin querer sería
     una simulación presentada como demo real.
@@ -54,6 +56,11 @@ def build_roles(settings) -> RoleExecutor:
             model_id=settings.lmstudio_model,
             api_key=settings.lmstudio_api_key,
         )
+    if settings.role_provider == "openrouter":
+        return OpenRouterRoleExecutor(
+            api_key=settings.openrouter_api_key,
+            model_id=settings.openrouter_model,
+        )
     if settings.role_provider == "strands":
         if not settings.agent_root.strip():
             raise RuntimeError(
@@ -64,7 +71,7 @@ def build_roles(settings) -> RoleExecutor:
         interpreter = agent_root / ".venv" / "Scripts" / "python.exe"
         return StrandsSubagentExecutor(interpreter, agent_root)
     raise RuntimeError(
-        "AUDIAI_ROLE_PROVIDER inválido: use mock, lmstudio o strands (recibí '"
+        "AUDIAI_ROLE_PROVIDER inválido: use mock, lmstudio, openrouter o strands (recibí '"
         + settings.role_provider
         + "')"
     )
@@ -79,6 +86,13 @@ def create_app() -> FastAPI:
         redoc_url=None,
     )
     roles = build_roles(settings)
+    configured_model = (
+        settings.openrouter_model
+        if settings.role_provider == "openrouter"
+        else settings.lmstudio_model
+        if settings.role_provider == "lmstudio"
+        else ""
+    )
     app.state.audit_runner = ManagedAuditRunner(
         roles,
         InMemoryAuditStore(),
@@ -91,7 +105,12 @@ def create_app() -> FastAPI:
     app.state.agent_chat = AgentChatService(
         roles,
         provider_label=settings.role_provider,
-        chat_responder=roles if settings.role_provider == "lmstudio" else None,
+        configured_model=configured_model,
+        chat_responder=(
+            roles
+            if settings.role_provider in {"lmstudio", "openrouter"}
+            else None
+        ),
     )
     app.state.roles_provider = settings.role_provider
     app.include_router(health_router)

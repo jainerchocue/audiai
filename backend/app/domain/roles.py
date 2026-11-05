@@ -297,6 +297,7 @@ class ChatResponder(Protocol):
         turns: tuple[ChatTurn, ...],
         *,
         timeout_seconds: float,
+        context: str | None = None,
     ) -> ChatResponse:
         ...
 
@@ -311,6 +312,7 @@ class StreamingChatResponder(ChatResponder, Protocol):
         *,
         timeout_seconds: float,
         on_delta: Callable[[str], None],
+        context: str | None = None,
     ) -> ChatResponse:
         ...
 

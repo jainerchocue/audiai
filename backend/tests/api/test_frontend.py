@@ -36,89 +36,52 @@ def _served_chat_bundle() -> str:
 def test_home_is_the_chat_and_declares_the_provider_visibly() -> None:
     html = _served_chat_bundle()
 
+    # Documento local, sin estilos ni scripts embebidos.
     assert "<title>AudiAI</title>" in html
     assert 'href="/assets/audiai.css"' in html
     assert 'src="/assets/audiai.js"' in html
     assert "<style>" not in _served("/")
     assert "<script>" not in _served("/")
     assert 'message.author === "agent" ? "AudiAI" : "Tú"' not in html
+
+    # Pantalla principal: saludo y composer.
     assert "<h1>AudiAI</h1>" in html
     assert 'id="welcomeGreeting"' in html
-    assert 'id="downloadReportBtn"' in html
-    assert 'state.state !== "completa"' in html
-    assert "Buenas noches" in html
-    assert "function formatModelName(modelId)" in html
     assert "¿Qué quieres resolver hoy?" in html
+    assert "Buenas noches" in html
     assert 'id="welcomeCapability"' not in html
     assert 'class="welcome-trust"' not in html
-    assert 'option value="local">Auto</option>' in html
-    assert 'disclosure.id = "activityDisclosure"' in html
-    assert "get_display_name" in html
-    assert "razonamiento interno privado" in html
-    assert "simulado" in html.lower()
-    assert "revisión humana" in html.lower()
+    assert 'placeholder="Escribe una instrucción o pregunta"' in html
+    assert 'placeholder="Escribe una instrucción o pregunta" disabled' in html
     assert 'id="contextBtn"' in html
     assert 'id="contextAttachment"' in html
     assert 'id="contextAttachmentLabel"' in html
     assert 'id="removeContextBtn"' in html
-    assert 'placeholder="Escribe una instrucción o pregunta"' in html
-    assert '"Escribe una instrucción o pregunta"' in html
+    assert 'aria-label="Elegir carpeta del proyecto; se analizará localmente sin subir archivos"' in html
+    assert "análisis local, sin subir archivos" in html
+    assert "select_project_folder" in html
     assert 'messageBody.project_path = attachedProject' in html
     assert 'selectedProjectFolder = folder' in html
-    assert re.search(
-        r"if \(folder\) \{\s+selectedProjectFolder = folder;"
-        r"\s+renderContextAttachment\(\);",
-        html,
-    )
-    assert 'index !== latestAgentMessage' in html
-    assert 'aria-label="Elegir carpeta del proyecto; se analizará localmente sin subir archivos"' in html
-    assert "select_project_folder" in html
-    assert "análisis local, sin subir archivos" in html
+
+    # Proveedor y modelo visibles, con atribución honesta.
+    assert "function formatModelName(modelId)" in html
+    assert 'option value="local">Auto</option>' in html
+    assert 'localModel ? "LM Studio · local" : "Auto"' in html
+    assert 'state.roles_provider === "lmstudio"' in html
+    assert "Modelo local: las solicitudes se envían a LM Studio en este equipo." in html
+    assert 'id="modelMenu"' in html
+    assert 'id="modelChip"' in html
+    assert 'id="modelSelector"' in html
     assert 'id="connectionDot"' not in html
-    assert 'id="summaryMetrics"' in html
-    assert 'id="chatLog"' in html
-    assert "activityStatus" in html
-    assert 'classList.toggle("is-working", isWorking)' in html
-    assert 'setAttribute("aria-busy", String(isWorking))' in html
-    assert '      ? activityStatus.title' in html
-    assert 'activityStatus.title' in html
-    assert 'element("span", "activity-spinner", "")' in html
-    assert ".activity-disclosure[aria-busy=\"true\"] > summary" in html
-    assert ".activity-spinner {" in html
-    assert ".send.is-working::before" in html
-    assert "animation:send-spinner .8s linear infinite !important" in html
-    assert "animation:activity-spin .8s linear infinite !important" in html
-    assert 'isWorking ? "Mostrar las acciones en curso" : "Enviar mensaje"' in html
-    assert ".send.is-working svg { visibility:hidden; }" in html
-    assert ".send.is-working::before" in html
-    assert "animation:send-spinner .8s linear infinite" in html
-    assert 'if (activityStatus || pendingTurn)' in html
-    assert 'activity.open = !activity.open' in html
-    assert "title:\"Thinking\"" in html
-    assert 'title:"Responding"' in html
-    assert 'list: ["Reading files"' in html
-    assert 'checks: ["Analyzing code"' in html
-    assert 'sources: ["Checking local sources"' in html
-    assert '"Waiting for approval…"' in html
-    assert "AudiAI está trabajando ·" not in html
-    assert "updateStreamingMessage" not in html
-    assert "Actualizaciones del proceso" in html
-    assert 'security: ["Analyzing security"' in html
-    assert "scheduleAutomaticApproval" in html
-    assert 'analysis_mode:$("analysisModeSelector").value' in html
-    assert 'agent_mode:$("agentModeSelector").value' in html
+    assert "simulado" in html.lower()
+
+    # Selectores de alcance y orquestación.
     assert 'id="readMenu"' in html
     assert ">Lectura</span>" in html
     assert 'id="analysisModeSelector"' in html
     assert 'aria-describedby="analysisModeHint"' in html
     assert 'class="selector-hint" id="analysisModeHint"' in html
     assert 'value="research">Investigación</option>' in html
-    assert 'id="modelMenu"' in html
-    assert 'id="modelChip"' in html
-    assert 'id="modelSelector"' in html
-    assert 'localModel ? "LM Studio · local" : "Auto"' in html
-    assert 'state.roles_provider === "lmstudio"' in html
-    assert "Modelo local: las solicitudes se envían a LM Studio en este equipo." in html
     assert 'id="sensitivePolicy"' in html
     assert 'id="agentModeMenu"' in html
     assert 'value="agent">Agente</option>' in html
@@ -130,19 +93,71 @@ def test_home_is_the_chat_and_declares_the_provider_visibly() -> None:
     assert "sin búsqueda web" in html.lower()
     assert "pointerdown" in html
     assert 'event.key === "Escape"' in html
+
+    # Traza de progreso honesta: estados reales, resumen expandible y nota
+    # que aclara que no se expone razonamiento privado.
+    assert "function renderWorkBlock(turn)" in html
+    assert 'element("details", "activity-disclosure")' in html
+    assert 'element("span", "activity-spinner", "")' in html
+    assert 'element("span", "activity-check", "✓")' in html
+    assert "Trabajó durante " in html
+    assert "Esperando tu autorización…" in html
+    assert "Waiting for approval…" not in html
+    assert "Al pedir permiso" in html
+    assert "activity-step" in html
+    assert ".activity-disclosure[aria-busy=\"true\"] > summary" in html
+    assert ".activity-spinner {" in html
+    assert "razonamiento interno privado" in html
+    assert "Registro de acciones reales" in html
+    assert "function lastActivity(session, kind)" in html
+    assert "function formatDuration(milliseconds)" in html
+    assert "duration_ms: activity.duration_ms" in html
+    assert "MIN_STEP_MS" in html
+    assert "delete openActivities[liveWork.turn]" in html
+    assert 'title:"Pensando"' in html or "label:\"Pensando\"" in html
+    assert 'security: ["Analyzing security"' not in html
+    assert "Actualizaciones del proceso" not in html
+    assert "updateStreamingMessage" not in html
+
+    # Envío con bloqueo de UI y respuestas en directo cuando aplica.
+    assert 'classList.toggle("is-working", working)' in html
+    assert 'setAttribute("aria-busy", String(working))' in html
+    assert ".send.is-working::before" in html
+    assert "animation: send-spinner 0.8s linear infinite" in html
+    assert ".send.is-working svg { visibility: hidden; }" in html
+    assert "function postChatStream" in html
+    assert 'analysis_mode:$("analysisModeSelector").value' in html
+    assert 'agent_mode:$("agentModeSelector").value' in html
+    assert "scheduleAutomaticApproval" in html
+    assert "{quiet:true}" in html
+
+    # Panel de resultados con pestañas separadas.
+    assert 'id="summaryMetrics"' in html
+    assert 'id="chatLog"' in html
     assert 'id="evidenceTab"' in html
+    assert 'id="patchTab"' in html
     assert 'id="evidenceList"' in html
     assert "function renderEvidence()" in html
+    assert "function renderPatches()" in html
     assert "/skip/" in html
     assert 'id="workflow"' not in html
     assert "PROCESO DE AUDITORÍA" not in html
     assert not any(symbol in html for symbol in ("✦", "✧", "★", "☆"))
+
+
+def test_home_keeps_high_contrast_breakpoints_and_accessible_actions() -> None:
+    html = _served_chat_bundle()
+
     assert "RESPONSIVE" not in html
-    assert "@media(max-width:720px)" in html
-    assert "@media(min-width:1120px)" in html
-    assert "grid-template-columns:64px minmax(0,1fr)" in html
+    assert "@media (max-width: 720px)" in html
+    assert "@media (min-width: 1120px)" in html
+    assert "grid-template-columns: 64px minmax(0, 1fr)" in html
     assert "Autorizar lectura" in html
     assert "Autorizar IA y continuar" in html
+    assert "prefers-reduced-motion" in html
+    assert 'aria-live="polite"' in html
+    assert 'aria-label="Mensaje"' in html
+    assert 'aria-label="Enviar mensaje"' in html
 
 
 def test_classic_interface_keeps_export_and_the_phase_7_api() -> None:
@@ -170,10 +185,13 @@ def test_chat_styles_and_scripts_are_served_as_local_assets() -> None:
     assert css.status_code == 200
     assert css.headers["content-type"].startswith("text/css")
     assert ".msg.agent .who" not in css.text
-    assert ".welcome[hidden] { display:none; }" in css.text
+    assert ".welcome[hidden] { display: none; }" in css.text
+    assert ".activity-disclosure" in css.text
+    assert ".activity-step[data-status=\"running\"]" in css.text
     assert javascript.status_code == 200
     assert "function renderFormattedMessage" in javascript.text
     assert "function postChatStream" in javascript.text
+    assert "function renderWorkBlock" in javascript.text
 
 
 def test_frontend_does_not_shadow_the_api() -> None:

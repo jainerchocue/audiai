@@ -43,8 +43,13 @@ contexto con **×** o seleccionar otra carpeta.
 
 El identificador del modelo se muestra sin el nombre del backend. Con LM
 Studio, las solicitudes al modelo permanecen en la instancia local configurada.
-El uso de un proveedor externo requiere consentimiento explícito antes de
-enviar evidencia.
+OpenRouter y Strands son proveedores externos: AudiAI solicita consentimiento
+explícito antes de enviar evidencia y no la transmite si se omite la
+autorización.
+
+La clave de OpenRouter se configura localmente en el archivo `.env` de la raíz
+del repositorio; no se introduce en la interfaz ni se incluye en informes. El
+uso de OpenRouter puede generar costos según el modelo y la cuenta.
 
 Las instrucciones internas de cada rol se mantienen en
 [`backend/app/prompts/agent_prompts.md`](../backend/app/prompts/agent_prompts.md);

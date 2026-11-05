@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.domain.evidence import Evidence
 from app.services.agent_chat import (
+    Activity,
     ChatMessage,
     ChatSession,
     DocSection,
@@ -50,6 +51,30 @@ class PendingActionOut(BaseModel):
             kind=action.kind,
             caption=action.caption,
             hint=action.hint,
+        )
+
+
+class ActivityOut(BaseModel):
+    activity_id: str
+    turn: int = Field(ge=1)
+    kind: str
+    title: str
+    detail: str
+    status: str
+    origin: str
+    duration_ms: int = Field(ge=0)
+
+    @classmethod
+    def from_model(cls, activity: Activity) -> "ActivityOut":
+        return cls(
+            activity_id=activity.activity_id,
+            turn=activity.turn,
+            kind=activity.kind,
+            title=activity.title,
+            detail=activity.detail,
+            status=activity.status,
+            origin=activity.origin,
+            duration_ms=activity.duration_ms,
         )
 
 
@@ -143,9 +168,11 @@ class AgentStateOut(BaseModel):
     session_id: str
     state: str
     roles_provider: str
+    configured_model: str | None = None
     agent_mode: Literal["agent", "multiagent"]
     messages: list[ChatMessageOut]
     pending_action: PendingActionOut | None = None
+    activities: list[ActivityOut]
     ready_items: list[ReadyItemOut]
     docs: list[DocSectionOut]
     patches: list[PatchItemOut]
@@ -173,9 +200,11 @@ def _to_state(session: ChatSession, roles_provider: str) -> AgentStateOut:
         session_id=session.session_id,
         state=session.state,
         roles_provider=roles_provider,
+        configured_model=session.configured_model,
         agent_mode=session.agent_mode,
         messages=[ChatMessageOut.from_model(item) for item in session.messages],
         pending_action=PendingActionOut.from_model(session.pending),
+        activities=[ActivityOut.from_model(item) for item in session.activities],
         ready_items=[ReadyItemOut.from_model(i) for i in session.ready_items],
         docs=[DocSectionOut.from_model(section) for section in session.docs],
         patches=[PatchItemOut.from_model(patch) for patch in session.patches],

@@ -59,6 +59,43 @@ def service() -> AgentChatService:
     return AgentChatService(MockRoleProvider(), provider_label="mock")
 
 
+def test_chat_uses_audit_findings_as_context(
+    fixture_project: Path,
+) -> None:
+    class RecordingChat:
+        def __init__(self) -> None:
+            self.context = None
+
+        def respond(self, turns, *, timeout_seconds, context=None):
+            self.context = context
+            return ChatResponse(
+                content="Vi los hallazgos y te explico su gravedad.",
+                provider="mock",
+                model="test-model",
+            )
+
+    responder = RecordingChat()
+    service = AgentChatService(
+        MockRoleProvider(),
+        provider_label="mock",
+        chat_responder=responder,
+    )
+    state = service.create_session()
+    state = service.send_message(state.session_id, str(fixture_project))
+    for _ in range(8):
+        if state.pending is None:
+            break
+        state = service.approve(state.session_id, state.pending.action_id)
+
+    state = service.send_message(state.session_id, "¿Qué errores viste y son críticos?")
+
+    assert responder.context is not None
+    assert "Hallazgos:" in responder.context
+    assert state.findings[0].title in responder.context
+    assert state.findings[0].severity.value in responder.context
+    assert state.messages[-1].text.startswith("Vi los hallazgos")
+
+
 def test_full_flow_produces_findings_docs_and_patches(
     service: AgentChatService, fixture_project: Path
 ) -> None:
@@ -122,6 +159,24 @@ def test_full_flow_produces_findings_docs_and_patches(
     assert any(item.kind == "review" for item in state.ready_items)
     assert any(doc.title == "Revisión final de calidad" for doc in state.docs)
 
+    assert [activity.kind for activity in state.activities] == [
+        "list",
+        "checks",
+        "security",
+        "analysis",
+        "sources",
+        "docs",
+        "patches",
+        "review",
+    ]
+    assert all(activity.status == "completada" for activity in state.activities)
+    assert all(activity.turn == 1 for activity in state.activities)
+    assert all(activity.title for activity in state.activities)
+    assert all(activity.detail for activity in state.activities)
+    assert all(activity.duration_ms >= 0 for activity in state.activities)
+    assert "evidencia" in state.activities[0].detail
+    assert "hallazgo" in state.activities[1].detail
+
 
 def test_sensitive_file_requires_approval_before_its_content_is_read(
     service: AgentChatService, fixture_project: Path
@@ -160,6 +215,10 @@ def test_skipping_sensitive_file_continues_without_reading_it(
     assert state.pending.kind == "checks"
     assert all(item.source_path != ".env" for item in state.evidence)
     assert any("No se leyó su contenido" in message.text for message in state.messages)
+    skipped = state.activities[-1]
+    assert skipped.kind == "sensitive"
+    assert skipped.status == "omitida"
+    assert "No se leyó" in skipped.detail
 
 
 def test_sensitive_read_stays_within_the_total_byte_budget(
@@ -184,10 +243,15 @@ def test_sensitive_read_stays_within_the_total_byte_budget(
     assert state.pending.kind == "checks"
 
 
+@pytest.mark.parametrize("provider_label", ("strands", "openrouter"))
 def test_external_model_requires_one_session_consent_or_can_be_skipped_locally(
     fixture_project: Path,
+    provider_label: str,
 ) -> None:
-    service = AgentChatService(MockRoleProvider(), provider_label="strands")
+    service = AgentChatService(
+        MockRoleProvider(),
+        provider_label=provider_label,
+    )
     state = service.create_session()
     state = service.send_message(state.session_id, str(fixture_project))
     state = service.approve(state.session_id, state.pending.action_id)
@@ -201,10 +265,15 @@ def test_external_model_requires_one_session_consent_or_can_be_skipped_locally(
     assert any(patch.origin == "plantilla local (sin modelo)" for patch in local_state.patches)
 
 
+@pytest.mark.parametrize("provider_label", ("strands", "openrouter"))
 def test_external_model_consent_is_recorded_for_the_session(
     fixture_project: Path,
+    provider_label: str,
 ) -> None:
-    service = AgentChatService(MockRoleProvider(), provider_label="strands")
+    service = AgentChatService(
+        MockRoleProvider(),
+        provider_label=provider_label,
+    )
     state = service.create_session()
     state = service.send_message(state.session_id, str(fixture_project))
     state = service.approve(state.session_id, state.pending.action_id)
@@ -540,7 +609,7 @@ def test_lmstudio_converses_on_greeting_and_records_model_identity() -> None:
         def __init__(self) -> None:
             self.turns = ()
 
-        def respond(self, turns, *, timeout_seconds):
+        def respond(self, turns, *, timeout_seconds, context=None):
             self.turns = turns
             assert timeout_seconds > 0
             return ChatResponse(
@@ -569,10 +638,12 @@ def test_lmstudio_converses_on_greeting_and_records_model_identity() -> None:
 
 def test_streaming_chat_delivers_model_deltas_and_keeps_final_turn() -> None:
     class LocalStreamingChat:
-        def respond(self, turns, *, timeout_seconds):
+        def respond(self, turns, *, timeout_seconds, context=None):
             raise AssertionError("el chat debe usar el flujo incremental")
 
-        def stream_respond(self, turns, *, timeout_seconds, on_delta):
+        def stream_respond(
+            self, turns, *, timeout_seconds, on_delta, context=None
+        ):
             assert timeout_seconds > 0
             assert turns[-1].content == "Hola"
             on_delta("¡Hola! ")

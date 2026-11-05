@@ -76,6 +76,20 @@ def test_full_chat_flow_over_http(
             break
 
     assert state["state"] == "completa"
+    assert [item["kind"] for item in state["activities"]] == [
+        "list",
+        "checks",
+        "security",
+        "analysis",
+        "sources",
+        "docs",
+        "patches",
+        "review",
+    ]
+    assert all(item["status"] == "completada" for item in state["activities"])
+    assert all(item["detail"] for item in state["activities"])
+    assert all(item["duration_ms"] >= 0 for item in state["activities"])
+    assert all(item["turn"] == 1 for item in state["activities"])
     report = client.get(f"/agent/sessions/{session_id}/report.md")
     assert report.status_code == 200
     assert report.headers["content-type"].startswith("text/markdown")

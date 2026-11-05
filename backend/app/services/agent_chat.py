@@ -19,8 +19,8 @@ DIVISIÓN HONESTA DE TRABAJO
 - ``seguridad``, ``causa``, ``fuentes``, ``documentación``, ``parches`` y
   ``revisión final``: roles acotados del ejecutor configurado. En modo
   ``mock`` no hay modelo; con ``lmstudio`` las solicitudes se quedan en el
-  servidor local; con ``strands`` se pide permiso antes de enviar evidencia
-  al proveedor externo.
+  servidor local; con ``strands`` y ``openrouter`` se pide permiso antes de
+  enviar evidencia al proveedor externo.
 - Los fallos de los roles se declaran; el agente nunca simula resultados.
 
 Los paneles "Listo para revisar" y "Parches" se llenan solo con lo que ESTAS
@@ -30,6 +30,7 @@ acciones produjeron, no con estimaciones.
 from __future__ import annotations
 
 import threading
+import time
 import unicodedata
 from collections.abc import Callable
 from copy import deepcopy
@@ -38,6 +39,7 @@ from pathlib import Path
 
 from app.domain.evidence import Evidence
 from app.domain.finding import Finding, FindingOrigin, MissingEvidenceError
+from app.domain.severity import Severity
 from app.domain.roles import (
     ChatResponder,
     ChatTurn,
@@ -100,6 +102,18 @@ _SOURCE_FILE_NAMES = frozenset(
 
 _TEMPLATE_ORIGIN = "plantilla local (sin modelo)"
 
+_ACTION_TITLES = {
+    "list": "Lectura del proyecto",
+    "sensitive": "Archivos confidenciales",
+    "checks": "Comprobaciones deterministas",
+    "security": "Evaluación de seguridad",
+    "analysis": "Investigación de causa",
+    "sources": "Revisión de fuentes",
+    "docs": "Redacción del informe",
+    "patches": "Recomendaciones de parche",
+    "review": "Revisión final de calidad",
+}
+
 
 class AgentChatError(RuntimeError):
     """Base de los errores gestionados del chat."""
@@ -128,6 +142,20 @@ class PendingAction:
     kind: str  # list | sensitive | checks | analysis | docs | patches
     caption: str
     hint: str
+
+
+@dataclass(frozen=True, slots=True)
+class Activity:
+    """Registro real de una etapa ejecutada, sin razonamiento privado."""
+
+    activity_id: str
+    turn: int
+    kind: str
+    title: str
+    detail: str
+    status: str  # completada | fallida | omitida
+    origin: str
+    duration_ms: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -170,8 +198,11 @@ class SessionSummary:
 class ChatSession:
     """Estado conversacional de una revisión; muta solo el servicio."""
 
-    def __init__(self, session_id: str) -> None:
+    def __init__(
+        self, session_id: str, *, configured_model: str | None = None
+    ) -> None:
         self.session_id = session_id
+        self.configured_model = configured_model
         self.state = "esperando_ruta"
         self.scope_root: Path | None = None
         self.user_context = ""
@@ -184,6 +215,7 @@ class ChatSession:
         self.external_data_consent = False
         self.sensitive_read_approved = False
         self.findings: list[Finding] = []
+        self.activities: list[Activity] = []
         self.ready_items: list[ReadyItem] = []
         self.docs: list[DocSection] = []
         self.patches: list[PatchItem] = []
@@ -194,6 +226,7 @@ class ChatSession:
         self.chat_model: str | None = None
         self._action_counter = 0
         self._finding_counter = 0
+        self._activity_counter = 0
 
     # -- helpers internos ----------------------------------------------------
 
@@ -226,6 +259,35 @@ class ChatSession:
                 f"(esperaba '{pending.action_id}'): el chat avanza en orden"
             )
         return pending
+
+    def record_activity(
+        self,
+        action: PendingAction,
+        *,
+        status: str,
+        detail: str,
+        origin: str,
+        duration_ms: int,
+    ) -> Activity:
+        """Añade una etapa ejecutada al registro visible del turno actual."""
+
+        self._activity_counter += 1
+        turn = max(
+            1,
+            sum(1 for message in self.messages if message.author == "user"),
+        )
+        activity = Activity(
+            activity_id=f"actv-{self._activity_counter:03d}",
+            turn=turn,
+            kind=action.kind,
+            title=_ACTION_TITLES.get(action.kind, action.caption),
+            detail=detail,
+            status=status,
+            origin=origin,
+            duration_ms=max(0, duration_ms),
+        )
+        self.activities.append(activity)
+        return activity
 
     def context_items(self) -> tuple[tuple[ContextItem, ...], int]:
         """Fragmentos de evidencia acotados por el presupuesto de bytes."""
@@ -298,6 +360,119 @@ class ChatSession:
         return confirmed, discarded
 
 
+# -- contexto para el chat ------------------------------------------------------
+
+
+def _session_brief(session: ChatSession) -> str | None:
+    """Resume la auditoría en curso para que el chat hable de lo ya observado.
+
+    Son datos verificados de esta sesión, no instrucciones ni contenido nuevo:
+    no se leen archivos ni se envía nada que el usuario no haya autorizado.
+    """
+
+    parts: list[str] = []
+    if session.scope_root is not None:
+        parts.append(f"Carpeta analizada: {session.scope_root}")
+    if session.evidence:
+        lines = [
+            f"- [{item.evidence_id}] {item.location} (herramienta: {item.tool})"
+            for item in session.evidence[:25]
+        ]
+        parts.append("Evidencia observada:\n" + "\n".join(lines))
+    if session.findings:
+        lines = []
+        for finding in session.findings[:25]:
+            evidence = ", ".join(finding.evidence_ids) or "sin evidencia citada"
+            state = "confirmado" if finding.is_confirmed else "hipótesis"
+            lines.append(
+                f"- [{finding.severity.value}] {finding.title} ({state}); "
+                f"evidencia: {evidence}. {finding.explanation[:280]}"
+            )
+        parts.append("Hallazgos:\n" + "\n".join(lines))
+    if session.docs:
+        lines = [
+            f"- {section.title}: {section.body[:220]}"
+            for section in session.docs[:8]
+        ]
+        parts.append("Documentación generada:\n" + "\n".join(lines))
+    if session.patches:
+        lines = [
+            f"- {patch.title}: {patch.description[:160]}"
+            for patch in session.patches[:8]
+        ]
+        parts.append("Parches propuestos (solo texto):\n" + "\n".join(lines))
+    if not parts:
+        return None
+    brief = "\n\n".join(parts)
+    return brief[:6_000]
+
+
+def _local_brief_reply(session: ChatSession) -> str | None:
+    """Respuesta determinista sobre lo ya auditado cuando no hay modelo."""
+
+    if not session.findings:
+        return None
+    total = len(session.findings)
+    critical = sum(
+        1 for finding in session.findings if finding.severity is Severity.CRITICAL
+    )
+    high = sum(1 for finding in session.findings if finding.severity is Severity.HIGH)
+    header = f"Revisé {session.scope_root}: {total} hallazgo(s)"
+    if critical or high:
+        header += f", {critical} crítico(s) y {high} alto(s)"
+    lines = [header + "."]
+    for finding in session.findings[:5]:
+        lines.append(
+            f"· [{finding.severity.value}] {finding.title} "
+            f"(evidencia: {', '.join(finding.evidence_ids) or 'sin cita'})"
+        )
+    if session.patches:
+        lines.append(
+            f"Hay {len(session.patches)} parche(s) propuesto(s) en el panel."
+        )
+    return "\n".join(lines)
+
+
+def _completion_summary(session: ChatSession) -> str:
+    """Cierre proactivo: qué se encontró, con qué gravedad y con qué evidencia."""
+
+    if not session.findings:
+        return (
+            "Revisión completa. No quedaron hallazgos con evidencia válida en "
+            "esta sesión; revisa las limitaciones del informe antes de darla "
+            "por concluyente. ¿Quieres que explique qué se comprobó?"
+        )
+    order = {
+        Severity.CRITICAL: 0,
+        Severity.HIGH: 1,
+        Severity.MEDIUM: 2,
+        Severity.LOW: 3,
+        Severity.INFO: 4,
+        Severity.UNKNOWN: 5,
+    }
+    ranked = sorted(session.findings, key=lambda item: order[item.severity])
+    critical = sum(
+        1 for item in ranked if item.severity is Severity.CRITICAL
+    )
+    high = sum(1 for item in ranked if item.severity is Severity.HIGH)
+    header = f"Revisión completa: {len(ranked)} hallazgo(s)"
+    if critical or high:
+        header += f", {critical} crítico(s) y {high} de gravedad alta"
+    lines = [header + "."]
+    for finding in ranked[:4]:
+        lines.append(
+            f"· [{finding.severity.value}] {finding.title} — evidencia: "
+            f"{', '.join(finding.evidence_ids) or 'sin cita'}"
+        )
+    if len(ranked) > 4:
+        lines.append(f"· y {len(ranked) - 4} más en el panel de hallazgos.")
+    lines.append(
+        "Pregúntame por cualquiera de ellos y te digo qué tan grave es, qué "
+        "lo respalda o qué parche propuse."
+    )
+    return "\n".join(lines)
+
+
 # -- servicio -------------------------------------------------------------------
 
 
@@ -310,12 +485,18 @@ class AgentChatService:
         *,
         provider_label: str,
         chat_responder: ChatResponder | None = None,
+        configured_model: str | None = None,
     ) -> None:
         self._roles = roles
         self._provider_label = provider_label
         self._chat_responder = chat_responder
-        self._requires_external_consent = provider_label == "strands"
-        self._uses_model_provider = provider_label in {"lmstudio", "strands"}
+        self._configured_model = (configured_model or "").strip() or None
+        self._requires_external_consent = provider_label in {"strands", "openrouter"}
+        self._uses_model_provider = provider_label in {
+            "lmstudio",
+            "strands",
+            "openrouter",
+        }
         self._lock = threading.Lock()
         self._sessions: dict[str, ChatSession] = {}
         self._session_locks: dict[str, threading.RLock] = {}
@@ -326,7 +507,10 @@ class AgentChatService:
     def create_session(self) -> ChatSession:
         with self._lock:
             self._counter += 1
-            session = ChatSession(session_id=f"chat-{self._counter:04d}")
+            session = ChatSession(
+                session_id=f"chat-{self._counter:04d}",
+                configured_model=self._configured_model,
+            )
             session.ask(
                 "Hola. Dime la ruta de la carpeta que quieres revisar "
                 "(ej: C:\\Users\\tu\\proyecto). Solo leo: no modifico ni "
@@ -377,7 +561,17 @@ class AgentChatService:
                     on_chat_delta=on_chat_delta,
                 )
             else:
-                session.ask(_status_line(session), user_text=clean)
+                if _looks_like_path(clean):
+                    session.ask(_status_line(session), user_text=clean)
+                else:
+                    self._reply_to_user(
+                        session,
+                        clean,
+                        on_chat_delta=on_chat_delta,
+                        local_fallback=(
+                            _local_brief_reply(session) or _status_line(session)
+                        ),
+                    )
             return self._snapshot(session)
 
     def approve(self, session_id: str, action_id: str) -> ChatSession:
@@ -395,7 +589,22 @@ class AgentChatService:
                 )
             ):
                 session.external_data_consent = True
+            before = _SessionCounts.capture(session)
+            started = time.perf_counter()
             self._execute(session, action)
+            duration_ms = round((time.perf_counter() - started) * 1000)
+            status = (
+                "fallida"
+                if _failure_count(session) > before.failures
+                else "completada"
+            )
+            session.record_activity(
+                action,
+                status=status,
+                detail=_activity_detail(session, before, status),
+                origin=_activity_origin(session, before, status),
+                duration_ms=duration_ms,
+            )
             return self._snapshot(session)
 
     def skip(self, session_id: str, action_id: str) -> ChatSession:
@@ -405,6 +614,7 @@ class AgentChatService:
             is_single_agent_consent = (
                 action.kind == "analysis" and session.agent_mode == "agent"
             )
+            started = time.perf_counter()
             if (
                 self._requires_external_consent
                 and (action.kind == "security" or is_single_agent_consent)
@@ -431,6 +641,13 @@ class AgentChatService:
                     "recomendaciones locales."
                 )
                 session.state = "completa"
+                session.record_activity(
+                    action,
+                    status="omitida",
+                    detail="No se compartió evidencia con el proveedor externo.",
+                    origin="decisión del usuario; sin envío externo",
+                    duration_ms=round((time.perf_counter() - started) * 1000),
+                )
                 return self._snapshot(session)
             if action.kind != "sensitive":
                 raise StaleActionError(
@@ -443,6 +660,13 @@ class AgentChatService:
                 "No se leyó su contenido; continuaré con el resto del proyecto."
             )
             self._propose_checks(session)
+            session.record_activity(
+                action,
+                status="omitida",
+                detail="No se leyó el contenido de los archivos sensibles.",
+                origin="decisión del usuario",
+                duration_ms=round((time.perf_counter() - started) * 1000),
+            )
             return self._snapshot(session)
 
     def get_session(self, session_id: str) -> ChatSession:
@@ -1215,6 +1439,7 @@ class AgentChatService:
                 "No hay hallazgos para proponer parches: la revisión queda "
                 "completa sin panel de parches."
             )
+            session.ask(_completion_summary(session))
             session.state = "completa"
             return
         session.ask(
@@ -1414,6 +1639,7 @@ class AgentChatService:
             "en Documentación y fuentes; solo se muestran observaciones que "
             "citan evidencia de esta sesión."
         )
+        session.ask(_completion_summary(session))
         session.state = "completa"
 
     def _review_failure(self, session: ChatSession, reason: str) -> None:
@@ -1547,10 +1773,12 @@ class AgentChatService:
         on_chat_delta: Callable[[str], None] | None = None,
     ) -> None:
         session.messages.append(ChatMessage(author="user", text=text))
+        brief = _session_brief(session)
         if self._chat_responder is None:
-            session.messages.append(ChatMessage(author="agent", text=local_fallback))
+            reply = _local_brief_reply(session) or local_fallback
+            session.messages.append(ChatMessage(author="agent", text=reply))
             if on_chat_delta is not None:
-                on_chat_delta(local_fallback)
+                on_chat_delta(reply)
             return
 
         conversation = (
@@ -1571,28 +1799,36 @@ class AgentChatService:
                 response = self._chat_responder.respond(
                     turns,
                     timeout_seconds=_CHAT_TIMEOUT_SECONDS,
+                    context=brief,
                 )
             elif isinstance(self._chat_responder, StreamingChatResponder):
                 response = self._chat_responder.stream_respond(
                     turns,
                     timeout_seconds=_CHAT_TIMEOUT_SECONDS,
                     on_delta=on_chat_delta,
+                    context=brief,
                 )
             else:
                 response = self._chat_responder.respond(
                     turns,
                     timeout_seconds=_CHAT_TIMEOUT_SECONDS,
+                    context=brief,
                 )
                 on_chat_delta(response.content)
         except RuntimeError as error:
+            provider_hint = (
+                "Revisa tu conexión, la clave y el modelo configurado."
+                if self._provider_label == "openrouter"
+                else "Verifica que LM Studio esté abierto y tenga un "
+                "modelo Qwen cargado."
+            )
             session.messages.append(
                 ChatMessage(
                     author="agent",
                     text=(
-                        f"No pude conectar con el modelo local "
-                        f"({error}). Verifica que LM Studio esté abierto y "
-                        "tenga un modelo Qwen cargado. Puedes continuar "
-                        "compartiendo la ruta del proyecto."
+                        f"No pude consultar el modelo ({error}). "
+                        f"{provider_hint} Puedes continuar compartiendo la "
+                        "ruta del proyecto."
                     ),
                 )
             )
@@ -1623,6 +1859,89 @@ class AgentChatService:
 
 
 # -- funciones de módulo (plantillas locales, sin mutación de sesión) -------
+
+
+@dataclass(frozen=True, slots=True)
+class _SessionCounts:
+    evidence: int
+    findings: int
+    docs: int
+    patches: int
+    ready: int
+    failures: int
+
+    @classmethod
+    def capture(cls, session: ChatSession) -> "_SessionCounts":
+        return cls(
+            evidence=len(session.evidence),
+            findings=len(session.findings),
+            docs=len(session.docs),
+            patches=len(session.patches),
+            ready=len(session.ready_items),
+            failures=_failure_count(session),
+        )
+
+
+def _failure_count(session: ChatSession) -> int:
+    return sum(1 for item in session.ready_items if item.kind == "agent_failure")
+
+
+def _counted(count: int, singular: str, plural: str) -> str:
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def _truncate(text: str, limit: int) -> str:
+    clean = " ".join(text.split())
+    return clean if len(clean) <= limit else clean[: limit - 1].rstrip() + "…"
+
+
+def _activity_detail(
+    session: ChatSession, before: _SessionCounts, status: str
+) -> str:
+    """Resumen breve y verificable de lo que produjo la etapa."""
+
+    if status == "fallida":
+        failures = [
+            item
+            for item in session.ready_items[before.ready :]
+            if item.kind == "agent_failure"
+        ]
+        reason = failures[-1].detail if failures else "la etapa no se completó"
+        return f"No completado: {_truncate(reason, 160)}"
+
+    parts: list[str] = []
+    evidence = len(session.evidence) - before.evidence
+    findings = len(session.findings) - before.findings
+    docs = len(session.docs) - before.docs
+    patches = len(session.patches) - before.patches
+    if evidence:
+        parts.append(_counted(evidence, "evidencia", "evidencias"))
+    if findings:
+        parts.append(_counted(findings, "hallazgo", "hallazgos"))
+    if docs:
+        parts.append(_counted(docs, "sección", "secciones"))
+    if patches:
+        parts.append(_counted(patches, "propuesta", "propuestas"))
+    if not parts:
+        new_ready = session.ready_items[before.ready :]
+        if new_ready:
+            parts.append(new_ready[-1].title)
+        elif session.state == "bloqueada":
+            parts.append("revisión detenida")
+        else:
+            parts.append("sin resultados nuevos")
+    return " · ".join(parts[:3])
+
+
+def _activity_origin(
+    session: ChatSession, before: _SessionCounts, status: str
+) -> str:
+    new_ready = session.ready_items[before.ready :]
+    if new_ready:
+        return new_ready[-1].origin
+    if status == "fallida":
+        return "fallo declarado"
+    return "ejecución local (sin IA)"
 
 
 def _status_line(session: ChatSession) -> str:

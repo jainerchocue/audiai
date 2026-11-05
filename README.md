@@ -21,6 +21,12 @@ y puede utilizar modelos de lenguaje para ayudar a analizar los resultados.
 Consulta la [guía de uso](docs/README.md) para conocer los modos de análisis,
 los informes y cómo adjuntar un proyecto como contexto.
 
+## Demostración
+
+[![Ver demostración de AudiAI](https://img.youtube.com/vi/8cyYC9ALzQM/hqdefault.jpg)](https://youtu.be/8cyYC9ALzQM)
+
+Selecciona la miniatura para ver el video de presentación de AudiAI en YouTube.
+
 ## Privacidad y límites
 
 - El análisis se limita a la carpeta seleccionada y es de solo lectura.
@@ -52,7 +58,11 @@ dependencias:
 ```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
+
+Edita `.env` en la raíz del repositorio para configurar el proveedor. El archivo
+real está excluido de Git; no publiques ni compartas la clave de API.
 
 ## Ejecución
 
@@ -86,7 +96,25 @@ Set-Location backend
 
 El proveedor se selecciona mediante la variable de entorno
 `AUDIAI_ROLE_PROVIDER`. Los valores disponibles son `mock` (predeterminado),
-`lmstudio` y `strands`.
+`lmstudio`, `openrouter` y `strands`.
+
+### OpenRouter
+
+En `.env`, establece el proveedor y completa el identificador de un modelo
+disponible en tu cuenta de OpenRouter y tu clave API:
+
+```dotenv
+AUDIAI_ROLE_PROVIDER=openrouter
+OPENROUTER_MODEL=proveedor/modelo
+OPENROUTER_API_KEY=tu_clave_de_openrouter
+```
+
+Inicia AudiAI desde la raíz con `.\.venv\Scripts\python.exe -m app` después de
+entrar en `backend`. Antes de enviar evidencia, la interfaz solicita
+autorización explícita. El servicio transmite el contexto autorizado a
+OpenRouter; el costo y la disponibilidad dependen del modelo y de la cuenta.
+No se realiza una llamada real hasta que configures credenciales y autorices
+el envío en la aplicación.
 
 Para usar LM Studio en PowerShell, configura el proveedor en la misma terminal
 desde la que inicies AudiAI:

@@ -35,6 +35,10 @@ los informes y cómo adjuntar un proyecto como contexto.
 
 ![Selector de modos Agente y Multiagente](docs/images/audiai-modos.png)
 
+### Autorización para leer archivos confidenciales
+
+![Solicitud de autorización de archivos confidenciales](docs/images/audiai-autorizacion.png)
+
 ## Privacidad y límites
 
 - El análisis se limita a la carpeta seleccionada y es de solo lectura.

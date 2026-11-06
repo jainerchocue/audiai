@@ -177,6 +177,8 @@ el código fuente correspondiente. La GPL-3.0 no obliga a publicar cambios que
 no se distribuyan ni a enviar contribuciones al proyecto original. La licencia
 no concede derechos sobre la marca AudiAI.
 
-## Autor
+## Autor y mantenimiento
 
-**Jainer Johany Chocue Viluche**
+Creador y mantenedor: Jainer Yohany Chocue Viluche.
+
+Repositorio original: https://github.com/jainerchocue/audiai

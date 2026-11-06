@@ -29,7 +29,7 @@ tengas autorización.
 
 ## Antes de empezar
 
-1. Lee el README y la documentación disponible en `docs/`.
+1. Lee el README y la documentación disponible.
 2. Revisa los issues y las pull requests existentes para evitar duplicados.
 3. Si propones un cambio grande, abre primero un issue para conversar
    sobre su objetivo, alcance y relación con el proyecto.
